@@ -24,7 +24,7 @@ import FoundationNetworking
 /// dependency in a static binary.
 public enum CLIRunner {
 
-    public static let version = "0.9.0"
+    public static let version = "0.9.1"
     private static let defaultLimit = 50
 
     public struct ExitStatus: Sendable {

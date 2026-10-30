@@ -49,6 +49,11 @@ final class TranscriptWindowTests: XCTestCase {
         XCTAssertFalse(first.hasEarlier)
         let next = TranscriptWindow(.after(first.end), fileSize: size)
         XCTAssertEqual([next.start, next.end], [5, budget + 5])
+
+        let opening = TranscriptWindow(.first, fileSize: size)
+        XCTAssertEqual([opening.start, opening.end], [0, budget])
+        XCTAssertTrue(opening.hasLater)
+        XCTAssertEqual(TranscriptWindow(.first, fileSize: 10).end, 10)
     }
 
     func testJoiningKeepsATurnReadTwiceOnce() throws {
@@ -106,6 +111,17 @@ final class TranscriptWindowTests: XCTestCase {
         let (joined, windows) = try await walk(source, id: "long")
         XCTAssertEqual(windows, 3)
         XCTAssertEqual(joined.turns.map(\.recordUUID), ids)
+
+        // ⌘↑ reads the first window on its own; reading on from there joins
+        // into the whole session too (B-044).
+        let first = try await source.loadTranscript(id: "long", window: .first)
+        XCTAssertEqual(first.turns.first?.recordUUID, ids.first, "the first window starts at the session's first turn")
+        XCTAssertFalse(try XCTUnwrap(first.window).hasEarlier)
+        var forward = [first]
+        while let window = forward.last?.window, window.hasLater {
+            forward.append(try await source.loadTranscript(id: "long", window: .after(window.end)))
+        }
+        XCTAssertEqual(try XCTUnwrap(AgentTranscript.joining(forward)).turns.map(\.recordUUID), ids)
     }
 
     func testCodexWindowsJoinIntoTheWholeSession() async throws {

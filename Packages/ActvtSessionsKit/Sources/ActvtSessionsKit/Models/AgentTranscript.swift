@@ -117,6 +117,8 @@ public struct TranscriptWindow: Sendable, Hashable {
         switch request {
         case .latest:
             self.init(start: fileSize > budget ? fileSize - budget : 0, end: fileSize, fileSize: fileSize)
+        case .first:
+            self.init(start: 0, end: min(fileSize, budget), fileSize: fileSize)
         case .before(let cursor):
             let end = min(cursor, fileSize)
             self.init(start: end > budget ? end - budget : 0, end: end, fileSize: fileSize)
@@ -131,6 +133,8 @@ public struct TranscriptWindow: Sendable, Hashable {
 public enum TranscriptWindowRequest: Sendable, Hashable {
     /// The newest bytes: what a session opens on.
     case latest
+    /// The oldest bytes: where a session starts.
+    case first
     /// The window that ends where an earlier read started.
     case before(UInt64)
     /// The window that starts where an earlier read ended.

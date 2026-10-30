@@ -332,14 +332,13 @@ public enum ClaudeTranscriptParser {
         guard let uuid = dict["uuid"] as? String else { return nil }
         let timestamp = parseTimestamp(dict["timestamp"]) ?? Date()
 
-        // System message body lives under `message` (matching `user`/`assistant`).
-        let body = dict["message"] as? [String: Any]
-        guard let subtype = body?["subtype"] as? String, allowedSystemSubtypes.contains(subtype) else {
+        // Unlike `user`/`assistant`, a system record has no `message`: its
+        // subtype and text sit on the record itself
+        // (`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted",…}`).
+        guard let subtype = dict["subtype"] as? String, allowedSystemSubtypes.contains(subtype) else {
             return nil
         }
-        let text = (body?["text"] as? String)
-            ?? (body?["message"] as? String)
-            ?? "[\(subtype)]"
+        let text = (dict["content"] as? String) ?? "[\(subtype)]"
         return .systemNotification(uuid: uuid, subtype: subtype, text: text, timestamp: timestamp)
     }
 
