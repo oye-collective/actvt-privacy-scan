@@ -322,6 +322,28 @@ final class LoopTests: XCTestCase {
         XCTAssertFalse(ClaudeProcessRegistry.isAlive(pid: 0, procStart: start))
     }
 
+    /// A process's declared session (B-057): its own entry, written for this
+    /// process. A pid whose recorded start differs (reused since), or a pid
+    /// with no entry, declares nothing. macOS records `lstart`; Linux ticks.
+    func testAProcessDeclaresTheSessionItsEntryNames() throws {
+        #if os(Linux)
+        throw XCTSkip("declared sessions are read on macOS, where the app runs")
+        #else
+        let start = try ownProcStart()
+        let started = try XCTUnwrap(ClaudeProcessRegistry.parseLstart(start))
+        try register(pid: getpid(), session: "the-terminal", procStart: start)
+        XCTAssertEqual(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config),
+                       "the-terminal")
+        XCTAssertNil(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started.addingTimeInterval(-60),
+                                                           configDirectory: config))
+        XCTAssertNil(ClaudeProcessRegistry.declaredSession(pid: getpid() + 1, startedAt: started, configDirectory: config))
+        // The entry is read each time: a /clear moves the process to a new session.
+        try register(pid: getpid(), session: "after-clear", procStart: start)
+        XCTAssertEqual(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config),
+                       "after-clear")
+        #endif
+    }
+
     /// Field 22 counts from after the command name, which may hold spaces
     /// and parentheses.
     func testTheLinuxStartIsReadAfterTheCommandName() {

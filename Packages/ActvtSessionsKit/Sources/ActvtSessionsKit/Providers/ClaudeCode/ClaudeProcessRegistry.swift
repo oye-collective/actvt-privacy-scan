@@ -22,7 +22,7 @@ import Darwin
 /// platform reports it: field 22 of `/proc/<pid>/stat` on Linux (clock ticks
 /// since boot), `LC_ALL=C TZ=UTC ps -o lstart=` on macOS
 /// ("Mon Oct  5 12:55:14 2026").
-struct ClaudeProcessRegistry: Sendable {
+public struct ClaudeProcessRegistry: Sendable {
     let liveSessionIds: Set<String>
 
     /// The registry beside a `projects` root, or nil when there is none: an
@@ -49,6 +49,24 @@ struct ClaudeProcessRegistry: Sendable {
         let procStart: String
     }
 
+    /// The session process `pid` says it is running, from its entry in a
+    /// config directory's registry (`<configDirectory>/sessions/<pid>.json`),
+    /// when that entry was written for this very process: its `procStart` is
+    /// `startedAt`, to the second. A pid reused since, or an entry left by a
+    /// process that died, says nothing. Read every time it is asked, because
+    /// one process can move to another session (`/clear`, `/resume`).
+    /// macOS entries only: Linux records `procStart` in clock ticks.
+    public static func declaredSession(pid: Int32, startedAt: Date, configDirectory: URL) -> String? {
+        let path = configDirectory.appendingPathComponent("sessions/\(pid).json").path
+        guard let data = FileManager.default.contents(atPath: path),
+              let entry = try? JSONDecoder().decode(Entry.self, from: data),
+              entry.pid == pid,
+              let recorded = parseLstart(entry.procStart),
+              Int64(recorded.timeIntervalSince1970) == Int64(startedAt.timeIntervalSince1970)
+        else { return nil }
+        return entry.sessionId
+    }
+
     /// Whether `pid` runs now and started when `procStart` says.
     static func isAlive(pid: Int32, procStart: String) -> Bool {
         guard pid > 0 else { return false }
@@ -72,12 +90,19 @@ struct ClaudeProcessRegistry: Sendable {
 
     /// `ps -o lstart` in the C locale and UTC: "Mon Oct  5 12:55:14 2026".
     /// The day is space-padded, so runs of spaces are collapsed first.
-    static func parseLstart(_ text: String) -> Date? {
+    /// One formatter for every read: the app asks on each sample, per running
+    /// Claude Code process, and making a formatter cost more than the rest of
+    /// the read (213 → 80 µs, B-057).
+    private static let lstartFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-        return formatter.date(from: text.split(separator: " ").joined(separator: " "))
+        return formatter
+    }()
+
+    static func parseLstart(_ text: String) -> Date? {
+        lstartFormatter.date(from: text.split(separator: " ").joined(separator: " "))
     }
 
     #if !os(Linux)
