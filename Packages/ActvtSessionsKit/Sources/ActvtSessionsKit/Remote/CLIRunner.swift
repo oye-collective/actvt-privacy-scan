@@ -14,7 +14,7 @@ import FoundationNetworking
 ///
 /// Surface:
 ///   actvt-cli sessions --json [--limit N] [--claude-root PATH] [--codex-root PATH] [--pi-root PATH]
-///   actvt-cli transcript --json --id <id> [--kind <raw>] [--claude-root PATH] [--codex-root PATH] [--pi-root PATH]
+///   actvt-cli transcript --json --id <id> [--kind <raw>] [--first | --before BYTE | --after BYTE] [--claude-root PATH] [--codex-root PATH] [--pi-root PATH]
 ///   actvt-cli notify --message <text> [--kind <raw>] [--project NAME]
 ///   actvt-cli usage --json
 ///   actvt-cli loops --json [--grace-minutes N] [--include-ended] [--claude-root PATH]
@@ -24,7 +24,7 @@ import FoundationNetworking
 /// dependency in a static binary.
 public enum CLIRunner {
 
-    public static let version = "0.9.1"
+    public static let version = "0.10.0"
     private static let defaultLimit = 50
 
     public struct ExitStatus: Sendable {
@@ -554,6 +554,7 @@ public enum CLIRunner {
         var json = false
         var sessionId: String?
         var kindRaw: String?
+        var window: TranscriptWindowRequest?
         var claudeRoot: URL?
         var codexRoot: URL?
         var piRoot: URL?
@@ -563,6 +564,20 @@ public enum CLIRunner {
             switch arg {
             case "--json":
                 json = true
+            case "--first", "--before", "--after":
+                guard window == nil else {
+                    stderr("only one of --first, --before and --after")
+                    return .usage
+                }
+                if arg == "--first" {
+                    window = .first
+                    continue
+                }
+                guard let raw = iterator.next(), let cursor = UInt64(raw) else {
+                    stderr("\(arg) requires a byte offset (a window's start or end)")
+                    return .usage
+                }
+                window = arg == "--before" ? .before(cursor) : .after(cursor)
             case "--id":
                 guard let raw = iterator.next(), !raw.isEmpty else {
                     stderr("--id requires a session id")
@@ -609,7 +624,7 @@ public enum CLIRunner {
 
         let registry = makeRegistry(claudeRoot: claudeRoot, codexRoot: codexRoot, piRoot: piRoot)
         guard let transcript = await loadTranscript(
-            registry: registry, sessionId: sessionId, kindRaw: kindRaw
+            registry: registry, sessionId: sessionId, kindRaw: kindRaw, window: window ?? .latest
         ) else {
             stderr("session not found: \(sessionId)")
             return .failure
@@ -635,14 +650,15 @@ public enum CLIRunner {
     /// kind (hand-run CLI) tries each available provider — wrong providers
     /// fail fast on file-not-found, so the sweep is cheap.
     static func loadTranscript(
-        registry: AgentSessionRegistry, sessionId: String, kindRaw: String?
+        registry: AgentSessionRegistry, sessionId: String, kindRaw: String?,
+        window: TranscriptWindowRequest = .latest
     ) async -> AgentTranscript? {
         if let kindRaw, let kind = AgentKind(rawValue: kindRaw) {
             guard let provider = registry.provider(for: kind) else { return nil }
-            return try? await provider.loadTranscript(id: sessionId)
+            return try? await provider.loadTranscript(id: sessionId, window: window)
         }
         for provider in await registry.availableProviders() {
-            if let transcript = try? await provider.loadTranscript(id: sessionId) {
+            if let transcript = try? await provider.loadTranscript(id: sessionId, window: window) {
                 return transcript
             }
         }
@@ -726,8 +742,12 @@ public enum CLIRunner {
     commands:
       sessions --json [--limit N] [--claude-root PATH] [--codex-root PATH] [--pi-root PATH]
           List agent sessions (Claude Code, Codex CLI, pi) as JSON, newest first.
-      transcript --json --id <id> [--kind <agentKind>] [--claude-root PATH] [--codex-root PATH] [--pi-root PATH]
-          Print one session's full transcript as JSON.
+      transcript --json --id <id> [--kind <agentKind>] [--first | --before BYTE | --after BYTE]
+                 [--claude-root PATH] [--codex-root PATH] [--pi-root PATH]
+          Print one session's transcript as JSON, a window of at most 25 MB of
+          its file: the latest by default, the first with --first, or the one
+          ending (starting) at a byte another window started (ended) at. The
+          payload's "window" gives the range read and the file's size.
       notify --message <text> [--kind needsInput|finished|failed] [--project NAME]
           Tell the user you have stopped. The message is picked up by Actvt on
           its next poll of this host and shown as a notification on their Mac.

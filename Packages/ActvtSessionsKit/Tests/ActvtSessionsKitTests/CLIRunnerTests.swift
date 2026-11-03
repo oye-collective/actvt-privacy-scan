@@ -193,5 +193,11 @@ final class CLIRunnerTests: XCTestCase {
 
         let noJSON = await runCLI(["transcript", "--id", "x"])
         XCTAssertEqual(noJSON.status, 64)
+
+        let twoWindows = await runCLI(["transcript", "--json", "--id", "x", "--first", "--after", "0"])
+        XCTAssertEqual(twoWindows.status, 64)
+
+        let noCursor = await runCLI(["transcript", "--json", "--id", "x", "--before", "start"])
+        XCTAssertEqual(noCursor.status, 64)
     }
 }

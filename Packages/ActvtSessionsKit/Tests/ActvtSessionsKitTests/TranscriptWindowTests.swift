@@ -83,7 +83,9 @@ final class TranscriptWindowTests: XCTestCase {
         String(decoding: try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
     }
 
-    func testClaudeWindowsJoinIntoTheWholeSession() async throws {
+    /// A Claude Code session `long` of `records` records about 40 KB each,
+    /// under `root`. Returns its record ids, oldest first.
+    private func writeLongClaudeSession() throws -> [String] {
         var lines: [String] = []
         var ids: [String] = []
         for i in 0..<records {
@@ -101,6 +103,11 @@ final class TranscriptWindowTests: XCTestCase {
         let dir = root.appendingPathComponent("-home-u-long", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: dir.appendingPathComponent("long.jsonl"))
+        return ids
+    }
+
+    func testClaudeWindowsJoinIntoTheWholeSession() async throws {
+        let ids = try writeLongClaudeSession()
         let source = ClaudeCodeSessionSource(rootURL: root)
         _ = try await source.listSessionRefs()
 
@@ -122,6 +129,42 @@ final class TranscriptWindowTests: XCTestCase {
             forward.append(try await source.loadTranscript(id: "long", window: .after(window.end)))
         }
         XCTAssertEqual(try XCTUnwrap(AgentTranscript.joining(forward)).turns.map(\.recordUUID), ids)
+    }
+
+    /// A remote session pages the same way, through `actvt-cli transcript`
+    /// (C-010): back from the latest window with `--before`, and forward from
+    /// `--first` with `--after`, each cursor taken from the last payload's
+    /// window.
+    func testTheCLIPagesThroughTheSession() async throws {
+        let ids = try writeLongClaudeSession()
+        func read(_ flags: [String]) async throws -> RemoteTranscript {
+            var out = "", err = ""
+            let status = await CLIRunner.run(
+                arguments: ["transcript", "--json", "--id", "long", "--kind", "claudeCode",
+                            "--claude-root", root.path] + flags,
+                stdout: { out += $0 }, stderr: { err += $0 })
+            XCTAssertEqual(status.code, 0, err)
+            return try RemoteSessionPayload.makeDecoder()
+                .decode(RemoteTranscriptPayload.self, from: Data(out.utf8)).transcript
+        }
+        func joined(_ windows: [RemoteTranscript]) throws -> [String] {
+            try XCTUnwrap(AgentTranscript.joining(windows.compactMap { $0.agentTranscript() })).turns.map(\.recordUUID)
+        }
+
+        var back = [try await read([])]
+        XCTAssertEqual(back[0].turns.last?.recordUUID, ids.last, "no flag reads the latest window")
+        while let window = back[0].window, window.start > 0 {
+            back.insert(try await read(["--before", String(window.start)]), at: 0)
+        }
+        XCTAssertEqual(back.count, 3)
+        XCTAssertEqual(try joined(back), ids)
+
+        var forward = [try await read(["--first"])]
+        XCTAssertEqual(forward[0].window?.start, 0)
+        while let window = forward.last?.window, window.end < window.fileSize {
+            forward.append(try await read(["--after", String(window.end)]))
+        }
+        XCTAssertEqual(try joined(forward), ids)
     }
 
     func testCodexWindowsJoinIntoTheWholeSession() async throws {
