@@ -139,6 +139,67 @@ public enum CodexSessionsLocator {
         return days
     }
 
+    // MARK: - Sub-agents
+
+    /// A sub-agent's rollout names the session that spawned it in its first
+    /// record: `session_meta.payload.parent_thread_id` (Codex 0.163; also under
+    /// `source.subagent.thread_spawn`). The field comes before the long
+    /// `instructions`, within the first few hundred bytes of a ~19 KB line, so a
+    /// bounded prefix answers without reading or parsing the whole record.
+    private static let parentThreadPattern = try! NSRegularExpression(
+        pattern: #""parent_thread_id"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})""#
+    )
+    static let headerPrefixBytes = 4096
+
+    /// The id of the session that spawned the rollout at `url` (nil for a
+    /// session a person started), and whether that is final. A rollout's first
+    /// record never changes, so a final answer holds for as long as the file
+    /// exists. One read before Codex has finished writing that record (a file
+    /// just created, or unreadable) is not final.
+    static func parentThreadId(ofRolloutAt url: URL) -> (id: String?, final: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, false) }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: headerPrefixBytes) else { return (nil, false) }
+        let head = data.prefix { $0 != 0x0A }           // the first record only
+        let final = head.count < data.count || data.count >= headerPrefixBytes
+        let text = String(decoding: head, as: UTF8.self)
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = parentThreadPattern.firstMatch(in: text, range: range),
+              let r = Range(match.range(at: 1), in: text)
+        else { return (nil, final) }
+        return (String(text[r]), true)
+    }
+
+    /// The listed sessions, each with the sub-agents it spawned, nested ones
+    /// included. A rollout whose parent is listed belongs to that parent's root
+    /// and is not a session of its own. One whose parent isn't listed (pruned,
+    /// or on another machine) stands as its own session, so its work is never
+    /// lost. `parentOf` gives the spawning session's id, if any.
+    static func group(_ sessions: [String: DiscoveredSession],
+                      parentOf: (DiscoveredSession) -> String?) -> [String: [DiscoveredSession]] {
+        func root(of session: DiscoveredSession) -> String {
+            var id = session.sessionId
+            var seen: Set<String> = [id]
+            while let next = sessions[id].flatMap(parentOf), sessions[next] != nil {
+                // Parents that name each other in a loop can't come from Codex;
+                // each then stands as its own session rather than vanishing.
+                guard seen.insert(next).inserted else { return session.sessionId }
+                id = next
+            }
+            return id
+        }
+        var groups: [String: [DiscoveredSession]] = [:]
+        for session in sessions.values {
+            let top = root(of: session)
+            if top == session.sessionId {
+                groups[top, default: []] += []
+            } else {
+                groups[top, default: []].append(session)
+            }
+        }
+        return groups
+    }
+
     /// Extract the trailing session UUID from a `rollout-<ts>-<uuid>.jsonl`
     /// filename. Returns `nil` if the name doesn't end in a UUID (e.g. a
     /// malformed or legacy file), so the caller skips it.

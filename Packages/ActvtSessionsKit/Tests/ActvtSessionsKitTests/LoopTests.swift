@@ -124,11 +124,12 @@ final class LoopTests: XCTestCase {
 
     /// Writes Claude Code's registry entry for a process, shaped like dgx's
     /// (2026-10-15): `<pid>.json` with the session it runs and its start.
-    private func register(pid: Int32, session: String, procStart: String) throws {
+    private func register(pid: Int32, session: String, procStart: String,
+                          status: [String: Any] = ["kind": "interactive", "status": "idle"]) throws {
         let dir = config.appendingPathComponent("sessions", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let entry: [String: Any] = ["pid": pid, "sessionId": session, "cwd": "/home/u/loop", "procStart": procStart,
-                                    "kind": "interactive", "status": "idle", "version": "2.1.300"]
+                                    "version": "2.1.300"].merging(status) { $1 }
         try JSONSerialization.data(withJSONObject: entry)
             .write(to: dir.appendingPathComponent("\(pid).json"))
     }
@@ -332,15 +333,51 @@ final class LoopTests: XCTestCase {
         let start = try ownProcStart()
         let started = try XCTUnwrap(ClaudeProcessRegistry.parseLstart(start))
         try register(pid: getpid(), session: "the-terminal", procStart: start)
-        XCTAssertEqual(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config),
+        XCTAssertEqual(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config)?.sessionId,
                        "the-terminal")
         XCTAssertNil(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started.addingTimeInterval(-60),
                                                            configDirectory: config))
         XCTAssertNil(ClaudeProcessRegistry.declaredSession(pid: getpid() + 1, startedAt: started, configDirectory: config))
         // The entry is read each time: a /clear moves the process to a new session.
         try register(pid: getpid(), session: "after-clear", procStart: start)
-        XCTAssertEqual(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config),
+        XCTAssertEqual(ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config)?.sessionId,
                        "after-clear")
+        #endif
+    }
+
+    /// What the entry says the process is doing (T-043): Claude Code's
+    /// `status`, `waitingFor` and `kind`, as 2.1.316 writes them. An entry
+    /// without `status` (before 2.1.221) says nothing.
+    func testAProcessDeclaresWhatItIsDoing() throws {
+        #if os(Linux)
+        throw XCTSkip("declared sessions are read on macOS, where the app runs")
+        #else
+        let start = try ownProcStart()
+        let started = try XCTUnwrap(ClaudeProcessRegistry.parseLstart(start))
+        let cases: [([String: Any], ClaudeProcessRegistry.Activity?)] = [
+            (["kind": "interactive", "status": "busy"], .working),
+            // A shell command it started is running: its own UI says working (2.1.318).
+            (["kind": "interactive", "status": "shell"], .working),
+            (["kind": "interactive", "status": "idle"], .atPrompt),
+            (["kind": "interactive", "status": "waiting", "waitingFor": "permission prompt"], .needsUser),
+            (["kind": "interactive", "status": "waiting", "waitingFor": "input needed"], .needsUser),
+            (["kind": "interactive", "status": "waiting", "waitingFor": "dialog open"], .inDialog),
+            (["kind": "interactive", "status": "waiting", "waitingFor": "sandbox request"], .needsUser),
+            // A dialog that says what the user must do is a wait for them.
+            (["kind": "interactive", "status": "waiting", "waitingFor": "dialog open",
+              "needs": "acknowledge the notice"], .needsUser),
+            (["kind": "bg", "status": "waiting", "waitingFor": "permission prompt"], .unattended),
+            (["kind": "sdk-cli", "status": "waiting", "waitingFor": "permission prompt"], .unattended),
+            (["kind": "sdk-cli", "status": "busy"], .working),
+            (["kind": "interactive"], nil),
+            (["kind": "interactive", "status": "napping"], nil),
+        ]
+        for (status, activity) in cases {
+            try register(pid: getpid(), session: "s", procStart: start, status: status)
+            let declared = ClaudeProcessRegistry.declaredSession(pid: getpid(), startedAt: started, configDirectory: config)
+            XCTAssertEqual(declared?.sessionId, "s")
+            XCTAssertEqual(declared?.activity, activity, "\(status)")
+        }
         #endif
     }
 

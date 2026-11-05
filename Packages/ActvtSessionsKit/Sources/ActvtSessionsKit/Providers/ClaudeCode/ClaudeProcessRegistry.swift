@@ -47,16 +47,70 @@ public struct ClaudeProcessRegistry: Sendable {
         let pid: Int32
         let sessionId: String
         let procStart: String
+        /// `busy`, `shell`, `idle` or `waiting` (Claude Code 2.1.221 and later;
+        /// `shell` while a shell command it started runs, which its own UI
+        /// shows as working, 2.1.318).
+        let status: String?
+        /// Why it waits, only while `waiting`: `permission prompt`,
+        /// `input needed`, `sandbox request` or `dialog open`.
+        let waitingFor: String?
+        /// What the user has to do, when Claude Code says (2.1.318): set on
+        /// the dialogs it notifies about, such as a notice to acknowledge.
+        let needs: String?
+        /// `interactive` for a terminal or IDE session; the others (`bg`,
+        /// `daemon`, `daemon-worker`) are runs nobody sits at.
+        let kind: String?
     }
 
-    /// The session process `pid` says it is running, from its entry in a
-    /// config directory's registry (`<configDirectory>/sessions/<pid>.json`),
-    /// when that entry was written for this very process: its `procStart` is
-    /// `startedAt`, to the second. A pid reused since, or an entry left by a
-    /// process that died, says nothing. Read every time it is asked, because
-    /// one process can move to another session (`/clear`, `/resume`).
-    /// macOS entries only: Linux records `procStart` in clock ticks.
-    public static func declaredSession(pid: Int32, startedAt: Date, configDirectory: URL) -> String? {
+    /// What a Claude Code process says it is doing, from its own entry. Only
+    /// Claude Code 2.1.221 and later write it; older entries say nothing.
+    public enum Activity: Sendable, Equatable {
+        /// `busy` or `shell`: working on a turn, however quiet its transcript is.
+        case working
+        /// `idle`: the turn is over and it sits at the prompt.
+        case atPrompt
+        /// `waiting` at a permission prompt, for an answer, or on a dialog that
+        /// says what the user has to do (`needs`): the user is needed now.
+        case needsUser
+        /// `waiting` on a dialog the user opened themselves (`/model`,
+        /// `/config`), which needs nothing of them.
+        case inDialog
+        /// A run nobody sits at (`claude -p`, the Agent SDK) that isn't busy.
+        case unattended
+
+        init?(status: String?, waitingFor: String?, needs: String? = nil, kind: String?) {
+            let attended = kind == nil || kind == "interactive"
+            switch status {
+            case "busy", "shell": self = .working
+            case "idle": self = attended ? .atPrompt : .unattended
+            case "waiting":
+                if !attended { self = .unattended }
+                else { self = waitingFor == "dialog open" && needs == nil ? .inDialog : .needsUser }
+            default: return nil
+            }
+        }
+    }
+
+    /// A process's own account of itself: the session it runs, and what it is
+    /// doing when its Claude Code says.
+    public struct Declaration: Sendable, Equatable {
+        public let sessionId: String
+        public let activity: Activity?
+
+        public init(sessionId: String, activity: Activity?) {
+            self.sessionId = sessionId
+            self.activity = activity
+        }
+    }
+
+    /// What process `pid` declares, from its entry in a config directory's
+    /// registry (`<configDirectory>/sessions/<pid>.json`), when that entry was
+    /// written for this very process: its `procStart` is `startedAt`, to the
+    /// second. A pid reused since, or an entry left by a process that died,
+    /// says nothing. Read every time it is asked, because one process can move
+    /// to another session (`/clear`, `/resume`), and its status changes with
+    /// every turn. macOS entries only: Linux records `procStart` in clock ticks.
+    public static func declaredSession(pid: Int32, startedAt: Date, configDirectory: URL) -> Declaration? {
         let path = configDirectory.appendingPathComponent("sessions/\(pid).json").path
         guard let data = FileManager.default.contents(atPath: path),
               let entry = try? JSONDecoder().decode(Entry.self, from: data),
@@ -64,7 +118,9 @@ public struct ClaudeProcessRegistry: Sendable {
               let recorded = parseLstart(entry.procStart),
               Int64(recorded.timeIntervalSince1970) == Int64(startedAt.timeIntervalSince1970)
         else { return nil }
-        return entry.sessionId
+        return Declaration(sessionId: entry.sessionId,
+                           activity: Activity(status: entry.status, waitingFor: entry.waitingFor, needs: entry.needs,
+                                              kind: entry.kind))
     }
 
     /// Whether `pid` runs now and started when `procStart` says.

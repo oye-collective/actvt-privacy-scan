@@ -99,18 +99,24 @@ public struct AgentSubagentRef: Sendable, Hashable {
 /// invalidation key. Produced by a provider so the indexer can locate and
 /// fingerprint a session's file(s) without duplicating provider path logic.
 /// `sidecarDir` is the per-session directory holding `subagents/` etc. (Claude
-/// Code), or `nil` for providers without sidecars.
+/// Code), or `nil` for providers without sidecars. `subagents` are the session's
+/// sub-agent transcripts that live outside it, as their own files (Codex: a
+/// rollout that names this session as its parent), keyed by the session id each
+/// would have had; they are part of this session, and `mtime` is the newest of
+/// them all.
 public struct IndexableFile: Sendable, Hashable {
     public let url: URL
     public let mtime: Date
     public let fileSize: Int64
     public let sidecarDir: URL?
+    public let subagents: [String: URL]
 
-    public init(url: URL, mtime: Date, fileSize: Int64, sidecarDir: URL?) {
+    public init(url: URL, mtime: Date, fileSize: Int64, sidecarDir: URL?, subagents: [String: URL] = [:]) {
         self.url = url
         self.mtime = mtime
         self.fileSize = fileSize
         self.sidecarDir = sidecarDir
+        self.subagents = subagents
     }
 }
 

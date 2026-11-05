@@ -13,7 +13,10 @@ import os.log
 /// Mirrors `CodexSessionSource`: a `[sessionId: DiscoveredSession]` cache
 /// rebuilt on every `listSessionRefs()` (stat-only walk), header-window
 /// summaries, and a streamed transcript build. pi has no sidecar directory,
-/// so `indexableFile` returns `sidecarDir: nil`.
+/// so `indexableFile` returns `sidecarDir: nil`. A session's sub-agents
+/// (pi-subagents, under the session's own directory) are listed as part of it,
+/// never as sessions of their own, and handed to the indexer in
+/// `IndexableFile.subagents` (T-042).
 ///
 /// One thing is pi-specific: a session file is a tree (see
 /// `PiTranscriptParser.activePath`), so the transcript is built from the
@@ -85,7 +88,7 @@ public actor PiSessionSource: AgentSessionSource {
             lastUpdatedAt: session.lastUpdatedAt,
             messageCount: fields.messageCount,
             gitBranch: nil,                     // not recorded by pi
-            subagentCount: 0                    // no subagent concept
+            subagentCount: session.subagents.count
         )
     }
 
@@ -235,7 +238,9 @@ public actor PiSessionSource: AgentSessionSource {
         let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = values?.contentModificationDate ?? session.lastUpdatedAt
         let size = Int64(values?.fileSize ?? 0)
-        return IndexableFile(url: url, mtime: mtime, fileSize: size, sidecarDir: nil)
+        // A sub-agent's file changing changes the session, so the newest wins.
+        return IndexableFile(url: url, mtime: max(mtime, session.lastUpdatedAt), fileSize: size,
+                             sidecarDir: nil, subagents: session.subagents)
     }
 
     // MARK: - Internals

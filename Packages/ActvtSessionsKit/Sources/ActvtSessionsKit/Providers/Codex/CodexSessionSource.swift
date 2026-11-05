@@ -12,14 +12,21 @@ import os.log
 ///
 /// Mirrors `ClaudeCodeSessionSource`: owns a `[sessionId: DiscoveredSession]`
 /// cache rebuilt on every `listSessionRefs()` (the cold-path walk is stat-only).
-/// Codex has no per-session sidecar directory, so `indexableFile` returns
-/// `sidecarDir: nil` and there's no subagent rollup.
+/// Codex has no per-session sidecar directory. A sub-agent is a rollout of its
+/// own that names its parent in its first record; it is listed as part of that
+/// parent, as Claude Code's `subagents/` are (`CodexSessionsLocator.group`), and
+/// `indexableFile` hands its file to the parent's metrics.
 public actor CodexSessionSource: AgentSessionSource {
     public nonisolated let kind: AgentKind = .codexCLI
     private nonisolated let logger = Logger(subsystem: "com.actvt.io", category: "CodexSessionSource")
 
     private let rootURL: URL
     private var byId: [String: CodexSessionsLocator.DiscoveredSession] = [:]
+    /// Each listed session's sub-agents, by the root session's id.
+    private var subagentsOf: [String: [CodexSessionsLocator.DiscoveredSession]] = [:]
+    /// The parent each rollout names, by file path ("" for none). Read once per
+    /// file: a rollout's first record never changes, so later walks stay stat-only.
+    private var parentByPath: [String: String] = [:]
 
     /// Wall-clock of the last full tree walk. Drives the live-path heuristic
     /// below: rapid back-to-back calls (FS-event bursts during an active write)
@@ -85,10 +92,26 @@ public actor CodexSessionSource: AgentSessionSource {
             self.lastFullWalkAt = now
         }
         self.byId = map
+        let listed = Set(map.values.map(\.fileURL.path))
+        parentByPath = parentByPath.filter { listed.contains($0.key) }
+        let groups = CodexSessionsLocator.group(map) { parent(of: $0) }
+        self.subagentsOf = groups
 
-        return map.values
-            .sorted { $0.lastUpdatedAt > $1.lastUpdatedAt }
-            .map { AgentSessionRef(id: $0.sessionId, agentKind: .codexCLI, lastUpdatedAt: $0.lastUpdatedAt) }
+        // A session was last updated when it or any of its sub-agents was.
+        return groups.compactMap { id, subagents -> AgentSessionRef? in
+            guard let session = map[id] else { return nil }
+            let updated = subagents.map(\.lastUpdatedAt).reduce(session.lastUpdatedAt, max)
+            return AgentSessionRef(id: id, agentKind: .codexCLI, lastUpdatedAt: updated)
+        }
+        .sorted { $0.lastUpdatedAt > $1.lastUpdatedAt }
+    }
+
+    private func parent(of session: CodexSessionsLocator.DiscoveredSession) -> String? {
+        let path = session.fileURL.path
+        if let known = parentByPath[path] { return known.isEmpty ? nil : known }
+        let found = CodexSessionsLocator.parentThreadId(ofRolloutAt: session.fileURL)
+        if found.final { parentByPath[path] = found.id ?? "" }
+        return found.id
     }
 
     // MARK: - Enrichment (Tier 2)
@@ -97,6 +120,9 @@ public actor CodexSessionSource: AgentSessionSource {
         let session = try await resolveSession(id: id)
         let header = try readHeaderRecords(from: session.fileURL, maxLines: 200)
         let derived = deriveSummaryFields(from: header)
+        let subagents = subagentsOf[id] ?? []
+        // As its ref says: last updated when it or one of its sub-agents was.
+        let updated = subagents.map(\.lastUpdatedAt).reduce(session.lastUpdatedAt, max)
 
         return AgentSessionSummary(
             id: id,
@@ -105,10 +131,10 @@ public actor CodexSessionSource: AgentSessionSource {
             title: derived.title ?? id,
             aiTitle: nil,                       // Codex has no server-generated title
             startedAt: derived.startedAt ?? session.lastUpdatedAt,
-            lastUpdatedAt: session.lastUpdatedAt,
+            lastUpdatedAt: updated,
             messageCount: derived.messageCount,
             gitBranch: nil,                     // not recorded by Codex
-            subagentCount: 0                    // no subagent concept
+            subagentCount: subagents.count
         )
     }
 
@@ -225,9 +251,15 @@ public actor CodexSessionSource: AgentSessionSource {
         guard let session = try? await resolveSession(id: id) else { return nil }
         let url = session.fileURL
         let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let mtime = values?.contentModificationDate ?? session.lastUpdatedAt
+        let own = values?.contentModificationDate ?? session.lastUpdatedAt
         let size = Int64(values?.fileSize ?? 0)
-        return IndexableFile(url: url, mtime: mtime, fileSize: size, sidecarDir: nil)
+        let subagents = subagentsOf[id] ?? []
+        // The newest of the session and its sub-agents, as its ref says, so a
+        // sub-agent's write re-reads the session.
+        let mtime = subagents.map(\.lastUpdatedAt).reduce(own, max)
+        return IndexableFile(url: url, mtime: mtime, fileSize: size, sidecarDir: nil,
+                             subagents: Dictionary(subagents.map { ($0.sessionId, $0.fileURL) },
+                                                   uniquingKeysWith: { a, _ in a }))
     }
 
     // MARK: - Internals

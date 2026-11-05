@@ -12,8 +12,17 @@ import Foundation
 /// ```
 /// ~/.pi/agent/sessions/
 ///   └── --<cwd with / and : replaced by ->--/
-///        └── <YYYY-MM-DDTHH-mm-ss-SSSZ>_<uuid>.jsonl   ← one session tree
+///        ├── <YYYY-MM-DDTHH-mm-ss-SSSZ>_<uuid>.jsonl   ← one session tree
+///        └── <YYYY-MM-DDTHH-mm-ss-SSSZ>_<uuid>/         ← its sub-agents, when it has any
+///             ├── <run>/run-0/session.jsonl                 (pi-subagents 0.84, fresh child)
+///             ├── <run>/run-0/session/<run>/run-0/session.jsonl   (a child's own child)
+///             ├── forks/<run>/<stamp>_<uuid>.jsonl          (fork child)
+///             └── <run>/run-0/subagent-artifacts/…          (pi-subagents' copies; never read)
 /// ```
+///
+/// Everything under a session's directory was spawned by that session, at
+/// whatever depth, so it is part of it (T-042). Each child's header also names
+/// its parent (`parentSession`); the directory says the same with a stat.
 ///
 /// The directory name is a lossy encoding of the working directory (a `-`
 /// inside a path component is indistinguishable from a `/`), so it is only
@@ -57,17 +66,26 @@ public enum PiSessionsLocator {
         let fileURL: URL
         /// Creation time parsed from the filename.
         let startedAt: Date
+        /// The newest of the session file and its sub-agents' files.
         let lastUpdatedAt: Date
+        /// Its sub-agents' session files, keyed by their path inside the
+        /// session's directory.
+        var subagents: [String: URL] = [:]
     }
+
+    /// pi-subagents keeps its own copies of each child's transcript here, so
+    /// reading them would count every child twice.
+    private static let artifactsDirName = "subagent-artifacts"
 
     /// `<YYYY-MM-DD>T<HH>-<mm>-<ss>-<SSS>Z_<uuid>` filename stem.
     private static let stemPattern = try! NSRegularExpression(
         pattern: #"^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"#
     )
 
-    /// Walk `<root>/<slug>/*.jsonl`. Returns `[]` when the root does not exist
-    /// (pi not installed). Files whose name is not a pi session stem are
-    /// skipped, not errors.
+    /// Walk `<root>/<slug>/*.jsonl`, and each session's directory for its
+    /// sub-agents. Returns `[]` when the root does not exist (pi not
+    /// installed). Files whose name is not a pi session stem are skipped, not
+    /// errors.
     static func discoverSessions(at root: URL = defaultSessionsURL) throws -> [DiscoveredSession] {
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -90,15 +108,48 @@ public enum PiSessionsLocator {
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 guard values?.isRegularFile == true else { continue }
                 guard let parsed = parseFileName(url.lastPathComponent) else { continue }
+                var updated = values?.contentModificationDate ?? parsed.startedAt
+                let subagents = subagentFiles(in: url.deletingPathExtension())
+                for file in subagents.values {
+                    if let m = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+                        updated = max(updated, m)
+                    }
+                }
                 results.append(DiscoveredSession(
                     sessionId: parsed.sessionId,
                     fileURL: url,
                     startedAt: parsed.startedAt,
-                    lastUpdatedAt: values?.contentModificationDate ?? parsed.startedAt
+                    lastUpdatedAt: updated,
+                    subagents: subagents
                 ))
             }
         }
         return results
+    }
+
+    /// The session files under a session's directory, at any depth: pi-subagents'
+    /// `session.jsonl` per run, and forks named like sessions. `[:]` when the
+    /// session spawned none (no directory).
+    static func subagentFiles(in dir: URL) -> [String: URL] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(
+            at: dir, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [:] }
+        let base = dir.standardizedFileURL.path + "/"
+        var files: [String: URL] = [:]
+        for case let url as URL in walker {
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+            if values?.isDirectory == true {
+                if url.lastPathComponent == artifactsDirName { walker.skipDescendants() }
+                continue
+            }
+            guard values?.isRegularFile == true, url.pathExtension == "jsonl",
+                  url.lastPathComponent == "session.jsonl" || parseFileName(url.lastPathComponent) != nil
+            else { continue }
+            let path = url.standardizedFileURL.path
+            files[path.hasPrefix(base) ? String(path.dropFirst(base.count)) : url.lastPathComponent] = url
+        }
+        return files
     }
 
     /// Split a session filename into its id and creation time. `nil` when the
