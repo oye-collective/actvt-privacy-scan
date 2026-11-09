@@ -133,7 +133,7 @@ public actor CodexSessionSource: AgentSessionSource {
             startedAt: derived.startedAt ?? session.lastUpdatedAt,
             lastUpdatedAt: updated,
             messageCount: derived.messageCount,
-            gitBranch: nil,                     // not recorded by Codex
+            gitBranch: derived.gitBranch,
             subagentCount: subagents.count
         )
     }
@@ -190,7 +190,7 @@ public actor CodexSessionSource: AgentSessionSource {
                 guard let record = CodexTranscriptParser.parseLine(data) else { return }
 
                 switch record {
-                case let .sessionMeta(recordCwd, _, _, _, _, _):
+                case let .sessionMeta(recordCwd, _, _, _, _, _, _):
                     if cwd == nil, let recordCwd { cwd = recordCwd }
 
                 case let .userMessage(text, timestamp):
@@ -298,6 +298,7 @@ public actor CodexSessionSource: AgentSessionSource {
     private struct SummaryFields {
         var firstUserText: String?
         var cwd: String?
+        var gitBranch: String?
         var startedAt: Date?
         var messageCount: Int = 0
         var title: String? {
@@ -312,8 +313,9 @@ public actor CodexSessionSource: AgentSessionSource {
         for data in lines {
             guard let record = CodexTranscriptParser.parseLine(data) else { continue }
             switch record {
-            case let .sessionMeta(cwd, _, _, _, _, timestamp):
+            case let .sessionMeta(cwd, _, _, _, _, gitBranch, timestamp):
                 if fields.cwd == nil, let cwd { fields.cwd = cwd }
+                if fields.gitBranch == nil, let gitBranch { fields.gitBranch = gitBranch }
                 if fields.startedAt == nil { fields.startedAt = timestamp }
             case let .userMessage(text, timestamp):
                 if fields.firstUserText == nil { fields.firstUserText = text }

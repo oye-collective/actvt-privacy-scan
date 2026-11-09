@@ -37,8 +37,10 @@ public enum CodexTranscriptParser {
     // MARK: - Public parsed record type
 
     public enum ParsedRecord: Sendable {
+        /// `gitBranch` is `payload.git.branch`, which Codex writes when its
+        /// working directory is a git repository (seen in 0.155.0); nil outside one.
         case sessionMeta(cwd: String?, cliVersion: String?, sessionId: String?,
-                         originator: String?, source: String?, timestamp: Date)
+                         originator: String?, source: String?, gitBranch: String?, timestamp: Date)
         case turnContext(model: String?, timestamp: Date)
         case userMessage(text: String, timestamp: Date)
         case assistantMessage(text: String, timestamp: Date)
@@ -115,6 +117,7 @@ public enum CodexTranscriptParser {
                 sessionId: payload["id"] as? String,
                 originator: payload["originator"] as? String,
                 source: payload["source"] as? String,
+                gitBranch: (payload["git"] as? [String: Any])?["branch"] as? String,
                 timestamp: timestamp
             )
         case "turn_context":
