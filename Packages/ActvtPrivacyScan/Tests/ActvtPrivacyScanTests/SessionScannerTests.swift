@@ -3,7 +3,7 @@
 //  ActvtPrivacyScanTests
 //
 
-import ActvtSessionsKit
+import ActvtSessionParsers
 import XCTest
 @testable import ActvtPrivacyScan
 
@@ -124,6 +124,76 @@ final class SessionScannerTests: XCTestCase {
         XCTAssertEqual(fromSubagent.first?.tool, "Bash")
         XCTAssertEqual(fromSubagent.first?.subagent?.agentType, "general-purpose")
         XCTAssertEqual(fromSubagent.first?.length, token.count)
+    }
+
+    private func jsonl(_ records: [[String: Any]]) throws -> Data {
+        let body = try records.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
+        return Data((body.joined(separator: "\n") + "\n").utf8)
+    }
+
+    /// An export: files renamed and moved out of every agent's own layout,
+    /// next to a .jsonl no agent wrote.
+    private func writeExport() throws -> URL {
+        let export = root.appendingPathComponent("export/nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: export, withIntermediateDirectories: true)
+        try jsonl([["type": "summary", "summary": "x"]] + (try session())).write(to: export.appendingPathComponent("claude.jsonl"))
+        try jsonl([
+            ["timestamp": "2026-10-19T08:00:00.000Z", "type": "session_meta", "payload": ["id": "c1", "cwd": "/Users/x/proj"]],
+            ["timestamp": "2026-10-19T08:00:01.000Z", "type": "event_msg",
+             "payload": ["type": "user_message", "message": "my key is \(token)"]],
+        ]).write(to: export.appendingPathComponent("codex.jsonl"))
+        try jsonl([
+            ["type": "session", "version": 3, "id": "p1", "timestamp": "2026-09-11T11:35:11.959Z", "cwd": "/home/dev/demo"],
+            ["type": "message", "id": "m1", "parentId": NSNull(), "timestamp": "2026-09-11T11:36:42.568Z",
+             "message": ["role": "user", "content": [["type": "text", "text": "card \(card)"]], "timestamp": 1789126602565]],
+        ]).write(to: export.appendingPathComponent("pi.jsonl"))
+        try jsonl([["event": "click", "email": "ops@example.com"]]).write(to: export.appendingPathComponent("other.jsonl"))
+        return export
+    }
+
+    /// Each file is recognized by its records, whatever it is called and wherever it is.
+    func testSessionFilesAreRecognizedByTheirRecords() throws {
+        let export = try writeExport()
+        XCTAssertEqual(AgentSessionFile.kind(ofFileAt: export.appendingPathComponent("claude.jsonl")), .claudeCode)
+        XCTAssertEqual(AgentSessionFile.kind(ofFileAt: export.appendingPathComponent("codex.jsonl")), .codexCLI)
+        XCTAssertEqual(AgentSessionFile.kind(ofFileAt: export.appendingPathComponent("pi.jsonl")), .pi)
+        XCTAssertNil(AgentSessionFile.kind(ofFileAt: export.appendingPathComponent("other.jsonl")))
+    }
+
+    /// A file outside every agent's folder is scanned by its agent's reader,
+    /// as fully as the same session in place.
+    func testScansAFileWhereverItLies() async throws {
+        let export = try writeExport()
+        let registry = AgentSessionRegistry.makeDefault()
+        func scan(_ name: String) async throws -> [SessionFinding] {
+            let url = export.appendingPathComponent(name)
+            let source = try XCTUnwrap(registry.provider(for: try XCTUnwrap(AgentSessionFile.kind(ofFileAt: url))))
+            return try await SessionScanner().scan(fileAt: url, from: source)
+        }
+        let claude = try await scan("claude.jsonl")
+        XCTAssertEqual(claude.map(\.category), [.privateEmail, .secret, .secret])
+        XCTAssertEqual(claude.first?.sessionId, "claude")
+        let codex = try await scan("codex.jsonl")
+        XCTAssertEqual(codex.map(\.category), [.secret])
+        let pi = try await scan("pi.jsonl")
+        XCTAssertEqual(pi.map(\.category), [.creditCard])
+    }
+
+    /// Archived Codex sessions are read like live ones, from their own folder.
+    func testArchivedCodexSessionsAreListed() async throws {
+        let archived = root.appendingPathComponent("archived_sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+        let id = "0199f0a1-2b3c-7d4e-8f90-a1b2c3d4e5f6"
+        try jsonl([
+            ["timestamp": "2026-10-19T08:00:00.000Z", "type": "session_meta", "payload": ["id": id, "cwd": "/Users/x/proj"]],
+            ["timestamp": "2026-10-19T08:00:01.000Z", "type": "event_msg",
+             "payload": ["type": "user_message", "message": "my key is \(token)"]],
+        ]).write(to: archived.appendingPathComponent("rollout-2026-10-19T08-00-00-\(id).jsonl"))
+        let source = CodexSessionSource(rootURL: archived)
+        let refs = try await source.listSessionRefs()
+        XCTAssertEqual(refs.map(\.id), [id])
+        let findings = try await SessionScanner().scan(refs[0], from: source)
+        XCTAssertEqual(findings.map(\.category), [.secret])
     }
 
     /// System notifications are scaffolding, and empty texts are skipped.

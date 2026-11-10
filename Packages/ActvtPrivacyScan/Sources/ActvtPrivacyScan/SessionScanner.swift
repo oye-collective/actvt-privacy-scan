@@ -3,7 +3,7 @@
 //  ActvtPrivacyScan
 //
 
-import ActvtSessionsKit
+import ActvtSessionParsers
 import Foundation
 
 /// Where in a session a text sits.
@@ -93,16 +93,29 @@ public struct SessionScanner: Sendable {
     /// Every finding in one session: its own thread, then each subagent's
     /// transcript, a person reads both.
     public func scan(_ ref: AgentSessionRef, from source: any AgentSessionSource) async throws -> [SessionFinding] {
-        var findings = try await scan(ref, subagent: nil) { try await source.loadTranscript(id: ref.id, window: $0) }
+        var findings = try await scan(agent: ref.agentKind, sessionId: ref.id, subagent: nil) {
+            try await source.loadTranscript(id: ref.id, window: $0)
+        }
         for subagent in try await source.listSubagents(of: ref.id) {
-            findings += try await scan(ref, subagent: subagent) { try await source.loadTranscript(of: subagent, window: $0) }
+            findings += try await scan(agent: ref.agentKind, sessionId: ref.id, subagent: subagent) {
+                try await source.loadTranscript(of: subagent, window: $0)
+            }
         }
         return findings
     }
 
+    /// Every finding in one transcript file wherever it lies, read by
+    /// `source`, the agent whose format it is in (`AgentSessionFile`). The
+    /// file stands alone, so its findings carry its name as the session.
+    public func scan(fileAt url: URL, from source: any AgentSessionSource) async throws -> [SessionFinding] {
+        try await scan(agent: source.kind, sessionId: url.deletingPathExtension().lastPathComponent, subagent: nil) {
+            try await source.loadTranscript(fileAt: url, window: $0)
+        }
+    }
+
     /// One transcript's findings, newest window first. A record read in two
     /// windows is scanned once.
-    private func scan(_ ref: AgentSessionRef, subagent: AgentSubagentRef?,
+    private func scan(agent: AgentKind, sessionId: String, subagent: AgentSubagentRef?,
                       load: (TranscriptWindowRequest) async throws -> AgentTranscript) async throws -> [SessionFinding] {
         var findings: [SessionFinding] = []
         var seenRecords = Set<String>()
@@ -118,7 +131,7 @@ public struct SessionScanner: Sendable {
                 for span in try detector.scan(text.text) {
                     let value = String(text.text[span.range])
                     findings.append(SessionFinding(
-                        agent: ref.agentKind, sessionId: ref.id, projectPath: transcript.projectPath,
+                        agent: agent, sessionId: sessionId, projectPath: transcript.projectPath,
                         subagent: subagent, kind: text.kind, timestamp: text.timestamp, tool: text.tool, category: span.category,
                         length: value.count, preview: Self.preview(of: value), valueHash: value.hashValue))
                 }

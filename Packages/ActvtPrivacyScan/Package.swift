@@ -3,7 +3,7 @@ import PackageDescription
 
 // The on-device secrets and personal-data scanner, shared by the Actvt app and
 // the standalone `privacy-scan` CLI. It reads transcripts through
-// ActvtSessionsKit, so it scans exactly the sessions and text the app does.
+// ActvtSessionParsers, so it scans exactly the sessions and text the app does.
 // Foundation-only, with no third-party dependencies and no networking code: it
 // builds on macOS and Linux, and everything it reads stays on the machine. The
 // app's AI detector (onnxruntime and a downloaded model) stays in the app and
@@ -18,22 +18,22 @@ let package = Package(
         .executable(name: "privacy-scan", targets: ["PrivacyScanCLI"]),
     ],
     dependencies: [
-        .package(path: "../ActvtSessionsKit"),
+        .package(path: "../ActvtSessionParsers"),
     ],
     targets: [
         .target(
             name: "ActvtPrivacyScan",
-            dependencies: ["ActvtSessionsKit"],
+            dependencies: ["ActvtSessionParsers"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
             name: "PrivacyScanCLI",
-            dependencies: ["ActvtPrivacyScan", "ActvtSessionsKit"],
+            dependencies: ["ActvtPrivacyScan", "ActvtSessionParsers"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "ActvtPrivacyScanTests",
-            dependencies: ["ActvtPrivacyScan", "ActvtSessionsKit"],
+            dependencies: ["ActvtPrivacyScan", "ActvtSessionParsers"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
