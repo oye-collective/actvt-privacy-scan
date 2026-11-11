@@ -198,6 +198,15 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
         try readTranscript(at: url, id: url.deletingPathExtension().lastPathComponent, thread: .subagent, window: request)
     }
 
+    // MARK: - Usage
+
+    /// Every response the session used, each once, from its own file and its
+    /// subagents' (`ClaudeResponseUsage`, the app index's definition).
+    public func responseUsage(id: String) async throws -> [ClaudeResponseUsage] {
+        let located = try await resolveSession(id: id)
+        return try ClaudeProjectsLocator.responseUsage(of: located.session, root: located.root)
+    }
+
     // MARK: - Subagents
 
     /// Each `subagents/agent-<id>.jsonl` beside the session, with the type and

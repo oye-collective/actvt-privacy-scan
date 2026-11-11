@@ -118,6 +118,40 @@ final class RegexPIIDetectorTests: XCTestCase {
         }
     }
 
+    /// Service tokens and webhook URLs that ruleset 7 missed when pasted bare (B-062).
+    /// Made-up values in each format's real shape and length.
+    func testDetectsBareServiceTokensAndWebhooks() {
+        let tokens = [
+            "ya29.a0Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAB7CD0EFgh3IJkl6MNop9qRs2",
+            "https://hooks.slack.com/services/T01234567/B01234567/Ab3dEf6hIj9kLm2nOp5qRs8t",
+            "https://discord.com/api/webhooks/123456789012345678/Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAB7CD0EFgh3IJkl6MNop9qRs2tUv5wXy8z",
+            "https://discordapp.com/api/webhooks/123456789012345678/Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAB7CD0EFgh3IJkl6MNop9qRs2tUv5wXy8z",
+            "pypi-AgEIcHlwaS5vcmcCJAb3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAB7CD0EFgh3IJkl6MN",
+            "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",
+            "SK0123456789abcdef0123456789abcdef",
+            "123456789:AAAb3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zA",
+            "ops_eyJzaWduSW5BZGRyZXNzIjoibXkuMXBhc3N3b3JkLmNvbSJ9",
+        ]
+        for token in tokens {
+            let h = hits("use \(token) for the mailer")
+            XCTAssertEqual(h.count, 1, token)
+            XCTAssertEqual(h.first?.0, .secret, token)
+            XCTAssertEqual(h.first?.1, token)
+        }
+    }
+
+    /// Hashes, ids, versions and the documented webhook endpoints share these
+    /// formats' alphabets but carry no credential.
+    func testServiceTokenLookalikesAreNotSecrets() {
+        let text = """
+        commit 3f786850e387550fdab836ed7e6dc881de23001b, image sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08,
+        request 550e8400-e29b-41d4-a716-446655440000, release v1.4.13, build 1762851120:done.
+        Post to https://hooks.slack.com/services/ or https://discord.com/api/webhooks/ once configured.
+        The SKU0123456789ABCDEF0123456789ABCDEF table, SK0123456789abcdef0123456789abcdef01 hash, SG.example, pypi-upload.
+        """
+        XCTAssertEqual(hits(text).map(\.1), [])
+    }
+
     func testBearerHeaderValueIsCaughtByItsPrefix() {
         let h = hits("Authorization: Bearer sk-ant-api03-Zq8vT2mK9pL4xR7nW1bY6cJ3")
         XCTAssertEqual(h.map(\.1), ["sk-ant-api03-Zq8vT2mK9pL4xR7nW1bY6cJ3"])

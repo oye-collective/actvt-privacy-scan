@@ -43,8 +43,14 @@ public enum PIIRegexPatterns {
     /// Provider tokens recognisable by their prefix alone, the way they get pasted
     /// bare into a prompt: Anthropic/OpenAI (`sk-…`), Stripe (`sk_live_…`, `rk_test_…`),
     /// GitHub (`ghp_…`, `github_pat_…`), Slack (`xoxb-…`), Google (`AIza…`), GitLab
-    /// (`glpat-…`), Hugging Face (`hf_…`) and npm (`npm_…`).
-    public static let prefixedToken = #"\b(?:sk-[A-Za-z0-9_-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{35}|glpat-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{30,}|npm_[A-Za-z0-9]{36})"#
+    /// (`glpat-…`), Hugging Face (`hf_…`), npm (`npm_…`), Google OAuth (`ya29.…`),
+    /// PyPI (`pypi-AgEIcHlwaS5vcmc…`), SendGrid (`SG.<22>.<43>`), Twilio (`SK` + 32 hex),
+    /// 1Password service accounts (`ops_eyJ…`) and Telegram bots (`<bot id>:<35>`).
+    public static let prefixedToken = #"\b(?:sk-[A-Za-z0-9_-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{35}|glpat-[A-Za-z0-9_-]{20,}|hf_[A-Za-z0-9]{30,}|npm_[A-Za-z0-9]{36}|ya29\.[A-Za-z0-9_-]{40,}|pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{16,}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|SK[0-9a-f]{32}(?![A-Za-z0-9])|ops_eyJ[A-Za-z0-9_-]{20,}|\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-]))"#
+    /// Webhook URLs whose path is the credential: anyone holding one can post as
+    /// the integration. Slack (`hooks.slack.com/services/T…/B…/…`) and Discord
+    /// (`discord.com/api/webhooks/<id>/<token>`, also `discordapp.com`).
+    public static let webhookURL = #"\bhttps://(?:hooks\.slack\.com/services/T[A-Z0-9]{8,}/B[A-Z0-9]{8,}/[A-Za-z0-9]{20,}|(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{17,20}/[A-Za-z0-9_-]{60,})"#
     // The two assignment rules below catch the keyword at the end of a longer
     // name, the way secrets are actually written: `DB_PASSWORD=…`,
     // `aws_secret_access_key = …`, `"apiKey": "…"`. So the keyword may follow `_`
@@ -80,7 +86,7 @@ public final class RegexPIIDetector: PIIDetector {
     /// Bump when the patterns or category mapping change so the metrics
     /// indexer (which stores this in `SessionMetrics.piiScanVersion`) re-scans
     /// stale rows on the next reconcile.
-    public static let rulesetVersion = 7
+    public static let rulesetVersion = 8
 
     public let isReady = true
 
@@ -125,6 +131,7 @@ public final class RegexPIIDetector: PIIDetector {
             rule(P.jwt, .secret),
             rule(P.awsAccessKeyID, .secret),
             rule(P.prefixedToken, .secret),
+            rule(P.webhookURL, .secret),
             rule(P.apiKeyContextual, .secret, group: 1, validator: PIIValidators.notPlaceholder),
             rule(P.passwordAssignment, .secret, group: 1, validator: PIIValidators.notPlaceholder),
             rule(P.bearerToken, .secret, group: 1, validator: PIIValidators.notPlaceholder),
