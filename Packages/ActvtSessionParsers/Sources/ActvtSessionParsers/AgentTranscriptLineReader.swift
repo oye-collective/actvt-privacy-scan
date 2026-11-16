@@ -6,7 +6,9 @@
 import Foundation
 
 /// Streams a JSONL transcript line-by-line without slurping the whole file into a
-/// single `String`. Reads in fixed-size chunks through a `FileHandle`, yielding
+/// single `String`. Reads in fixed-size chunks through a `SessionFileStream`
+/// (plain, or a Codex `.jsonl.zst` decoded as it goes; offsets are content
+/// offsets either way), yielding
 /// each newline-delimited line's UTF-8 bytes as `Data`; only one chunk plus the
 /// current partial line is resident at a time, so peak memory stays bounded
 /// regardless of transcript size. Splits on `\n` only and skips empty lines —
@@ -32,16 +34,15 @@ public enum AgentTranscriptLineReader {
     /// byte (a budget back from a cursor) and the window still starts on a line.
     public static func forEachLine(in fileURL: URL, startingIn range: Range<UInt64>,
                                    _ body: (Data, UInt64) throws -> Void) throws {
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
+        let stream = try SessionFileStream(url: fileURL)
         // Read from the byte before the range: if it ends a line, the range
         // starts on one; otherwise everything up to the next newline belongs to
         // a line that started earlier and is dropped.
         var bufferOffset: UInt64 = range.lowerBound == 0 ? 0 : range.lowerBound - 1
         var skippingPartialLine = range.lowerBound > 0
-        if bufferOffset > 0 { try handle.seek(toOffset: bufferOffset) }
+        if bufferOffset > 0 { try stream.seek(toOffset: bufferOffset) }
         var buffer = Data()
-        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
+        while let chunk = try stream.read(upToCount: chunkSize) {
             buffer.append(chunk)
             // Advance a cursor across the buffered chunk emitting each complete
             // line, and compact the consumed prefix only ONCE per chunk. Removing

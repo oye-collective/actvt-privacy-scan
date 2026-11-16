@@ -89,7 +89,8 @@ public struct AgentTranscript: Sendable, Hashable {
 public struct TranscriptWindow: Sendable, Hashable {
     public let start: UInt64
     public let end: UInt64
-    /// The file's size when the window was read.
+    /// The file's content size when the window was read (decoded, for a
+    /// compressed transcript).
     public let fileSize: UInt64
 
     /// The most a window reads. Two of them are the 50 MB a transcript on
@@ -107,8 +108,7 @@ public struct TranscriptWindow: Sendable, Hashable {
 
     /// The window `request` names in the file at `url`, as it is now.
     public init(_ request: TranscriptWindowRequest, fileAt url: URL) throws {
-        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber
-        self.init(request, fileSize: size?.uint64Value ?? 0)
+        self.init(request, fileSize: try SessionFileStream.contentSize(of: url))
     }
 
     /// The window `request` names in a file of `fileSize` bytes.

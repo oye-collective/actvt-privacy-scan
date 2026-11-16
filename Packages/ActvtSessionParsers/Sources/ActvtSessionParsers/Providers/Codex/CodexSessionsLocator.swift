@@ -16,6 +16,11 @@ import Foundation
 ///        └── rollout-<ISO-ts>-<sessionUUID>.jsonl   ← one session transcript
 /// ```
 ///
+/// The Codex desktop app compresses rollouts older than about a week in place,
+/// to `rollout-…-<uuid>.jsonl.zst`, and deletes the `.jsonl` (T-024). The
+/// compressed file is the same session: same id, read through
+/// `SessionFileStream`.
+///
 /// The session id is the trailing UUIDv7 in the filename (it also appears as
 /// `session_meta.id` inside the file, but Tier-1 listing is stat-only and never
 /// opens the file). Legacy flat `~/.codex/sessions/rollout-<date>-<uuid>.json`
@@ -75,16 +80,16 @@ public enum CodexSessionsLocator {
         var results: [DiscoveredSession] = []
         for case let url as URL in enumerator {
             let name = url.lastPathComponent
-            // Current format only: `rollout-*.jsonl`. Skips legacy flat `.json`
-            // and any non-session files that share the tree.
-            guard url.pathExtension == "jsonl", name.hasPrefix("rollout-") else { continue }
+            // Current format only: `rollout-*.jsonl`, plain or compressed.
+            // Skips legacy flat `.json` and any non-session files that share the tree.
+            guard isRollout(name) else { continue }
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
             guard values?.isRegularFile == true else { continue }
             guard let sessionId = sessionId(fromFileName: name) else { continue }
             let mtime = values?.contentModificationDate ?? Date.distantPast
             results.append(DiscoveredSession(sessionId: sessionId, fileURL: url, lastUpdatedAt: mtime))
         }
-        return results
+        return oneFilePerSession(results)
     }
 
     /// Cheaper, scoped variant of `discoverSessions` for the live FS-event path:
@@ -110,7 +115,7 @@ public enum CodexSessionsLocator {
             ) else { continue }
             for url in entries {
                 let name = url.lastPathComponent
-                guard url.pathExtension == "jsonl", name.hasPrefix("rollout-") else { continue }
+                guard isRollout(name) else { continue }
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 guard values?.isRegularFile == true else { continue }
                 guard let sessionId = sessionId(fromFileName: name) else { continue }
@@ -118,7 +123,24 @@ public enum CodexSessionsLocator {
                 results.append(DiscoveredSession(sessionId: sessionId, fileURL: url, lastUpdatedAt: mtime))
             }
         }
-        return results
+        return oneFilePerSession(results)
+    }
+
+    /// A rollout transcript's file name: `rollout-*.jsonl` or `rollout-*.jsonl.zst`.
+    static func isRollout(_ name: String) -> Bool {
+        name.hasPrefix("rollout-") && (name.hasSuffix(".jsonl") || name.hasSuffix(".jsonl.zst"))
+    }
+
+    /// While Codex compresses a rollout, the `.jsonl` and its `.jsonl.zst`
+    /// exist together for a moment. They are one session, read from the
+    /// `.jsonl`, which is complete until it is deleted.
+    static func oneFilePerSession(_ found: [DiscoveredSession]) -> [DiscoveredSession] {
+        var byId: [String: DiscoveredSession] = [:]
+        for session in found {
+            if let kept = byId[session.sessionId], !SessionFileStream.isCompressed(kept.fileURL) { continue }
+            byId[session.sessionId] = session
+        }
+        return found.filter { byId[$0.sessionId] == $0 }
     }
 
     /// The newest `limit` day-leaf directories (`root/YYYY/MM/DD`), found via
@@ -165,9 +187,9 @@ public enum CodexSessionsLocator {
     /// exists. One read before Codex has finished writing that record (a file
     /// just created, or unreadable) is not final.
     static func parentThreadId(ofRolloutAt url: URL) -> (id: String?, final: Bool) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, false) }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: headerPrefixBytes) else { return (nil, false) }
+        guard let stream = try? SessionFileStream(url: url),
+              let data = try? stream.read(upToCount: headerPrefixBytes) ?? Data()
+        else { return (nil, false) }
         let head = data.prefix { $0 != 0x0A }           // the first record only
         let final = head.count < data.count || data.count >= headerPrefixBytes
         let text = String(decoding: head, as: UTF8.self)
@@ -209,10 +231,10 @@ public enum CodexSessionsLocator {
     }
 
     /// Extract the trailing session UUID from a `rollout-<ts>-<uuid>.jsonl`
-    /// filename. Returns `nil` if the name doesn't end in a UUID (e.g. a
-    /// malformed or legacy file), so the caller skips it.
+    /// (or `.jsonl.zst`) filename. Returns `nil` if the name doesn't end in a
+    /// UUID (e.g. a malformed or legacy file), so the caller skips it.
     static func sessionId(fromFileName name: String) -> String? {
-        let stem = (name as NSString).deletingPathExtension
+        let stem = transcriptStem(of: name)
         let range = NSRange(stem.startIndex..<stem.endIndex, in: stem)
         guard let match = uuidSuffix.firstMatch(in: stem, range: range),
               let r = Range(match.range(at: 1), in: stem)
@@ -220,5 +242,12 @@ public enum CodexSessionsLocator {
             return nil
         }
         return String(stem[r])
+    }
+
+    /// A transcript's name without its `.jsonl` (and `.zst`) extension.
+    public static func transcriptStem(of name: String) -> String {
+        var stem = name
+        if stem.hasSuffix(".zst") { stem = (stem as NSString).deletingPathExtension }
+        return (stem as NSString).deletingPathExtension
     }
 }

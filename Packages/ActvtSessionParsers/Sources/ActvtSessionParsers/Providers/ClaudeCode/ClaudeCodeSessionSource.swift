@@ -140,7 +140,13 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
         let located = try await resolveSession(id: id)
         let session = located.session
         let header = try readHeaderRecords(from: session.fileURL, maxLines: 200)
-        let derived = deriveSummaryFields(from: header, fallbackId: id)
+        var derived = deriveSummaryFields(from: header, fallbackId: id)
+        let tail = try readTailRecords(from: session.fileURL)
+        // Claude Code rewrites the title as the session goes (hundreds of
+        // `ai-title` records in a long one), and since 2026-10 the head can be
+        // filled by request records before the first, so the newest title is
+        // read from the tail, where a live session's latest sits (B-061).
+        if let latest = Self.latestAITitle(in: tail) { derived.aiTitle = latest }
 
         return AgentSessionSummary(
             id: id,
@@ -153,8 +159,16 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
             messageCount: derived.messageCount,
             gitBranch: derived.gitBranch,
             subagentCount: ClaudeProjectsLocator.subagentCount(for: session, root: located.root),
-            wakesAt: Self.scheduledWake(in: try readTailRecords(from: session.fileURL))
+            wakesAt: Self.scheduledWake(in: tail)
         )
+    }
+
+    /// The last `ai-title` among these lines, or nil if they hold none.
+    static func latestAITitle(in lines: [Data]) -> String? {
+        for data in lines.reversed() {
+            if case let .aiTitle(text)? = ClaudeTranscriptParser.parseLine(data) { return text }
+        }
+        return nil
     }
 
     /// When the session's agent last scheduled itself to resume, or nil if it
@@ -384,15 +398,16 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
     }
 
     /// Read up to `maxLines` lines from the head of the file. We don't need
-    /// the whole transcript to build a summary — the relevant header records
-    /// (`ai-title`, first `user`) appear early.
+    /// the whole transcript to build a summary: the first `user` record (cwd,
+    /// branch, start) appears early. The title comes from the tail first.
     nonisolated private func readHeaderRecords(from url: URL, maxLines: Int) throws -> [Data] {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
-        // Read up to 256 KB — enough for ~200 lines of header records on
-        // typical transcripts (lines average ~1 KB; ai-title is in the first
-        // few dozen). Avoids loading multi-megabyte transcripts for a summary.
+        // Read up to 256 KB: enough for the first user record, which comes
+        // within a few lines. An `ai-title` can sit well past it (B-061), which
+        // is why the title is read from the tail. Avoids loading
+        // multi-megabyte transcripts for a summary.
         let chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
         guard !chunk.isEmpty else { return [] }
 

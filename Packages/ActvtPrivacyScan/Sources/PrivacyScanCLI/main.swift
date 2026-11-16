@@ -17,7 +17,8 @@ let usage = """
 
     With no path, it scans the agents' own folders on this machine, archived
     Codex sessions included. With paths, it scans those files and folders
-    instead: every .jsonl in them written by Claude Code, Codex or Pi, told
+    instead: every .jsonl (or Codex's compressed .jsonl.zst) in them written by
+    Claude Code, Codex or Pi, told
     apart by its records, so a copy or an export you are about to share can be
     checked first.
 
@@ -127,7 +128,7 @@ if paths.isEmpty {
         }
         let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey])
         while let file = walker?.nextObject() as? URL {
-            if file.pathExtension == "jsonl", (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+            if file.pathExtension == "jsonl" || file.lastPathComponent.hasSuffix(".jsonl.zst"), (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
                 files.append(file)
             }
         }

@@ -24,6 +24,10 @@ import Darwin
 /// ("Mon Oct  5 12:55:14 2026").
 public struct ClaudeProcessRegistry: Sendable {
     public let liveSessionIds: Set<String>
+    /// What each live session's process says it is doing, for the sessions
+    /// whose Claude Code writes it (2.1.221 and later). When two processes
+    /// run one session, one at work is the answer.
+    public let activities: [String: Activity]
 
     /// The registry beside a `projects` root, or nil when there is none: an
     /// older Claude Code, or a root that isn't a config directory's
@@ -33,14 +37,21 @@ public struct ClaudeProcessRegistry: Sendable {
             .appendingPathComponent("sessions", isDirectory: true)
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return nil }
         var live = Set<String>()
+        var activities: [String: Activity] = [:]
         for name in names where name.hasSuffix(".json") {
             guard let data = FileManager.default.contents(atPath: directory.appendingPathComponent(name).path),
                   let entry = try? JSONDecoder().decode(Entry.self, from: data),
                   isAlive(entry.pid, entry.procStart)
             else { continue }
             live.insert(entry.sessionId)
+            if let activity = Activity(status: entry.status, waitingFor: entry.waitingFor, needs: entry.needs,
+                                       kind: entry.kind),
+               activities[entry.sessionId] != .working {
+                activities[entry.sessionId] = activity
+            }
         }
         liveSessionIds = live
+        self.activities = activities
     }
 
     private struct Entry: Decodable {

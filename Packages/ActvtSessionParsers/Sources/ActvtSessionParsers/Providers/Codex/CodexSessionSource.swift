@@ -151,7 +151,7 @@ public actor CodexSessionSource: AgentSessionSource {
     }
 
     public func loadTranscript(fileAt url: URL, window request: TranscriptWindowRequest) async throws -> AgentTranscript {
-        try parseTranscript(fileURL: url, id: url.deletingPathExtension().lastPathComponent, window: request)
+        try parseTranscript(fileURL: url, id: CodexSessionsLocator.transcriptStem(of: url.lastPathComponent), window: request)
     }
 
     private nonisolated func parseTranscript(fileURL: URL, id: String, window request: TranscriptWindowRequest) throws -> AgentTranscript {
@@ -279,10 +279,7 @@ public actor CodexSessionSource: AgentSessionSource {
     /// `session_meta` (line 1) and the first real user message (title). Token
     /// totals live at the tail and are left to the metrics indexer.
     nonisolated private func readHeaderRecords(from url: URL, maxLines: Int) throws -> [Data] {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-
-        let chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
+        let chunk = try SessionFileStream(url: url).read(upToCount: 256 * 1024) ?? Data()
         guard !chunk.isEmpty else { return [] }
 
         var lines: [Data] = []
