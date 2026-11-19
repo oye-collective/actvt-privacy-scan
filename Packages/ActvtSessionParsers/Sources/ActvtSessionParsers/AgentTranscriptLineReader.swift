@@ -43,6 +43,10 @@ public enum AgentTranscriptLineReader {
         if bufferOffset > 0 { try stream.seek(toOffset: bufferOffset) }
         var buffer = Data()
         while let chunk = try stream.read(upToCount: chunkSize) {
+            // The bytes already buffered hold no newline (they are the start of
+            // a line still being read), so the search resumes at the new chunk:
+            // a line longer than a chunk is scanned once, not once per chunk.
+            var searchStart = buffer.endIndex
             buffer.append(chunk)
             // Advance a cursor across the buffered chunk emitting each complete
             // line, and compact the consumed prefix only ONCE per chunk. Removing
@@ -50,8 +54,7 @@ public enum AgentTranscriptLineReader {
             // remaining tail every line — O(lines²) per chunk for line-dense
             // transcripts. Indices are in Data's 0-based space.
             var lineStart = buffer.startIndex
-            var searchStart = lineStart
-            while let nl = buffer[searchStart...].firstIndex(of: newline) {
+            while let nl = firstNewline(in: buffer, from: searchStart) {
                 if skippingPartialLine {
                     skippingPartialLine = false
                 } else {
@@ -72,6 +75,20 @@ public enum AgentTranscriptLineReader {
         // Trailing line with no terminating newline.
         if !buffer.isEmpty, !skippingPartialLine, bufferOffset < range.upperBound {
             try body(buffer, bufferOffset)
+        }
+    }
+
+    /// The index of the first `\n` at or after `start`, found with `memchr`.
+    /// `Data`'s own `firstIndex(of:)` steps through the bytes one at a time on
+    /// Linux (swift-corelibs-foundation): about 58 MB/s on dgx, so reading a
+    /// 341 MB transcript took 6 s, against 0.06 s this way.
+    private static func firstNewline(in buffer: Data, from start: Data.Index) -> Data.Index? {
+        guard start < buffer.endIndex else { return nil }
+        return buffer.withUnsafeBytes { raw -> Data.Index? in
+            let offset = start - buffer.startIndex
+            guard let base = raw.baseAddress,
+                  let hit = memchr(base + offset, Int32(newline), raw.count - offset) else { return nil }
+            return buffer.startIndex + base.distance(to: UnsafeRawPointer(hit))
         }
     }
 }

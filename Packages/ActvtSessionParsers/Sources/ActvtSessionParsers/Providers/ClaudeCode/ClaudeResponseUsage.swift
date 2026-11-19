@@ -147,6 +147,13 @@ extension ClaudeProjectsLocator {
     }
 
     /// Every response a session used, each once, in file order.
+    ///
+    /// Only assistant records carry a response or its usage, and every other
+    /// record leaves the counter as it was, so a line without the bytes
+    /// `"assistant"` is skipped before it is decoded. The quoted word can't
+    /// occur inside an escaped JSON string, so no assistant record is missed.
+    /// Tool results and attachments are ~90% of a transcript's bytes (dgx,
+    /// T-045), and decoding them was most of the cost.
     public static func responseUsage(of session: DiscoveredSession, root: URL = defaultProjectsURL) throws
         -> [ClaudeResponseUsage]
     {
@@ -156,7 +163,8 @@ extension ClaudeProjectsLocator {
         for (url, subagent) in [(files.main, false)] + files.subagents.map({ ($0, true) }) {
             do {
                 try AgentTranscriptLineReader.forEachLine(in: url) { data in
-                    guard let line = ClaudeTranscriptParser.parse(data),
+                    guard data.range(of: assistantMarker) != nil,
+                          let line = ClaudeTranscriptParser.parse(data),
                           let usage = counter.usage(of: line.record, subagentTranscript: subagent) else { return }
                     out.append(usage)
                 }
@@ -166,4 +174,6 @@ extension ClaudeProjectsLocator {
         }
         return out
     }
+
+    private static let assistantMarker = Data(#""assistant""#.utf8)
 }

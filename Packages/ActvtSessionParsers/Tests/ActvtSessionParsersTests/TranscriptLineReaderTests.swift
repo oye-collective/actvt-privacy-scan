@@ -109,4 +109,21 @@ final class TranscriptLineReaderTests: XCTestCase {
             XCTAssertEqual(windows.flatMap { $0 }, all, "budget \(budget)")
         }
     }
+
+    /// Lines longer than a 256 KiB chunk (a tool result with a big file in it):
+    /// each read whole, once, from the whole file and from ranges that start
+    /// before, inside and right after one.
+    func testLinesLongerThanAChunkAreReadWhole() throws {
+        let long = String(repeating: "y", count: 600_000)
+        let longer = String(repeating: "z", count: 1_100_000)
+        let text = "{\"a\":1}\n{\"big\":\"\(long)\"}\n{\"b\":2}\n{\"huge\":\"\(longer)\"}\n\n{\"c\":3}"
+        write(text)
+        let all = expected(text)
+        XCTAssertEqual(all.count, 5)
+        XCTAssertEqual(try lines(0..<UInt64.max), all)
+        let bigStart = all[1].offset
+        for cut in [bigStart - 1, bigStart, bigStart + 1, bigStart + 300_000, all[2].offset, all[3].offset + 1] {
+            XCTAssertEqual(try lines(0..<cut) + lines(cut..<UInt64.max), all, "cut at \(cut)")
+        }
+    }
 }
