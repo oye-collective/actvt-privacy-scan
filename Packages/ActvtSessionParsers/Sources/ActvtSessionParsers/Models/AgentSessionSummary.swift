@@ -63,9 +63,12 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
     /// File modification time — used for "last updated" sort + change detection.
     public let lastUpdatedAt: Date
 
-    /// Number of visible turns (user + assistant). Sidechain / echo / system
-    /// records do NOT count toward this.
-    public let messageCount: Int
+    /// Number of visible turns: user prompts plus assistant responses, as the
+    /// metrics index counts them. Sidechain / echo / system records do NOT
+    /// count toward this. Nil when the summary's head read did not cover the
+    /// whole transcript, since a count over the head is not the session's
+    /// (B-065); the index's `userTurns + assistantTurns` is the full count.
+    public let messageCount: Int?
 
     /// Git branch captured on user records (if present).
     public let gitBranch: String?
@@ -88,7 +91,7 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
         aiTitle: String?,
         startedAt: Date,
         lastUpdatedAt: Date,
-        messageCount: Int,
+        messageCount: Int?,
         gitBranch: String?,
         subagentCount: Int,
         wakesAt: Date? = nil

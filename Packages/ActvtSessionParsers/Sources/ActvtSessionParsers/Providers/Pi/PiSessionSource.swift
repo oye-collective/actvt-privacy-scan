@@ -75,8 +75,8 @@ public actor PiSessionSource: AgentSessionSource {
 
     public func loadSummary(id: String) async throws -> AgentSessionSummary {
         let session = try await resolveSession(id: id)
-        let lines = try readHeaderLines(from: session.fileURL, maxLines: Self.summaryHeaderLines)
-        let fields = deriveSummaryFields(from: lines)
+        let head = try SessionFileHead(url: session.fileURL, maxLines: Self.summaryHeaderLines)
+        let fields = deriveSummaryFields(from: head.lines)
 
         return AgentSessionSummary(
             id: id,
@@ -86,7 +86,7 @@ public actor PiSessionSource: AgentSessionSource {
             aiTitle: nil,                       // pi has no server-generated title
             startedAt: fields.startedAt ?? session.startedAt,
             lastUpdatedAt: session.lastUpdatedAt,
-            messageCount: fields.messageCount,
+            messageCount: head.isWholeFile ? fields.messageCount : nil,
             gitBranch: nil,                     // not recorded by pi
             subagentCount: session.subagents.count
         )
@@ -254,29 +254,6 @@ public actor PiSessionSource: AgentSessionSource {
         _ = try await listSessionRefs()
         if let refreshed = byId[id] { return refreshed }
         throw AgentSessionSourceError.sessionNotFound(id: id)
-    }
-
-    /// Up to `maxLines` lines from the head of the file, read in one bounded
-    /// chunk. Enough for the header (line 1) and the first user prompt.
-    nonisolated private func readHeaderLines(from url: URL, maxLines: Int) throws -> [Data] {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-
-        let chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
-        guard !chunk.isEmpty else { return [] }
-
-        var lines: [Data] = []
-        lines.reserveCapacity(min(maxLines, 64))
-        var start = chunk.startIndex
-        let newline: UInt8 = 0x0A
-        for i in chunk.indices {
-            if chunk[i] == newline {
-                if start < i { lines.append(chunk.subdata(in: start..<i)) }
-                start = chunk.index(after: i)
-                if lines.count >= maxLines { break }
-            }
-        }
-        return lines
     }
 
     private struct SummaryFields {

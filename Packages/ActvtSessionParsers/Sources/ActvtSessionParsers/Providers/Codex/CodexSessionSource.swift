@@ -118,8 +118,8 @@ public actor CodexSessionSource: AgentSessionSource {
 
     public func loadSummary(id: String) async throws -> AgentSessionSummary {
         let session = try await resolveSession(id: id)
-        let header = try readHeaderRecords(from: session.fileURL, maxLines: 200)
-        let derived = deriveSummaryFields(from: header)
+        let head = try SessionFileHead(url: session.fileURL, maxLines: 200)
+        let derived = deriveSummaryFields(from: head.lines)
         let subagents = subagentsOf[id] ?? []
         // As its ref says: last updated when it or one of its sub-agents was.
         let updated = subagents.map(\.lastUpdatedAt).reduce(session.lastUpdatedAt, max)
@@ -132,7 +132,7 @@ public actor CodexSessionSource: AgentSessionSource {
             aiTitle: nil,                       // Codex has no server-generated title
             startedAt: derived.startedAt ?? session.lastUpdatedAt,
             lastUpdatedAt: updated,
-            messageCount: derived.messageCount,
+            messageCount: head.isWholeFile ? derived.messageCount : nil,
             gitBranch: derived.gitBranch,
             subagentCount: subagents.count
         )
@@ -273,27 +273,6 @@ public actor CodexSessionSource: AgentSessionSource {
         _ = try await listSessionRefs()
         if let refreshed = byId[id] { return refreshed }
         throw AgentSessionSourceError.sessionNotFound(id: id)
-    }
-
-    /// Read up to `maxLines` lines from the head of the file — enough for the
-    /// `session_meta` (line 1) and the first real user message (title). Token
-    /// totals live at the tail and are left to the metrics indexer.
-    nonisolated private func readHeaderRecords(from url: URL, maxLines: Int) throws -> [Data] {
-        let chunk = try SessionFileStream(url: url).read(upToCount: 256 * 1024) ?? Data()
-        guard !chunk.isEmpty else { return [] }
-
-        var lines: [Data] = []
-        lines.reserveCapacity(min(maxLines, 64))
-        var start = chunk.startIndex
-        let newline: UInt8 = 0x0A
-        for i in chunk.indices {
-            if chunk[i] == newline {
-                if start < i { lines.append(chunk.subdata(in: start..<i)) }
-                start = chunk.index(after: i)
-                if lines.count >= maxLines { break }
-            }
-        }
-        return lines
     }
 
     private struct SummaryFields {

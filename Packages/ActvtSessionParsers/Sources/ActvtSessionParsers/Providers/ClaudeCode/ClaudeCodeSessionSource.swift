@@ -139,8 +139,8 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
     public func loadSummary(id: String) async throws -> AgentSessionSummary {
         let located = try await resolveSession(id: id)
         let session = located.session
-        let header = try readHeaderRecords(from: session.fileURL, maxLines: 200)
-        var derived = deriveSummaryFields(from: header, fallbackId: id)
+        let head = try SessionFileHead(url: session.fileURL, maxLines: 200)
+        var derived = deriveSummaryFields(from: head.lines, fallbackId: id)
         let tail = try readTailRecords(from: session.fileURL)
         // Claude Code rewrites the title as the session goes (hundreds of
         // `ai-title` records in a long one), and since 2026-10 the head can be
@@ -156,7 +156,7 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
             aiTitle: derived.aiTitle,
             startedAt: derived.startedAt ?? session.lastUpdatedAt,
             lastUpdatedAt: session.lastUpdatedAt,
-            messageCount: derived.messageCount,
+            messageCount: head.isWholeFile ? derived.messageCount : nil,
             gitBranch: derived.gitBranch,
             subagentCount: ClaudeProjectsLocator.subagentCount(for: session, root: located.root),
             wakesAt: Self.scheduledWake(in: tail)
@@ -397,36 +397,6 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
         throw AgentSessionSourceError.sessionNotFound(id: id)
     }
 
-    /// Read up to `maxLines` lines from the head of the file. We don't need
-    /// the whole transcript to build a summary: the first `user` record (cwd,
-    /// branch, start) appears early. The title comes from the tail first.
-    nonisolated private func readHeaderRecords(from url: URL, maxLines: Int) throws -> [Data] {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-
-        // Read up to 256 KB: enough for the first user record, which comes
-        // within a few lines. An `ai-title` can sit well past it (B-061), which
-        // is why the title is read from the tail. Avoids loading
-        // multi-megabyte transcripts for a summary.
-        let chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
-        guard !chunk.isEmpty else { return [] }
-
-        var lines: [Data] = []
-        lines.reserveCapacity(min(maxLines, 64))
-        var start = chunk.startIndex
-        let newline: UInt8 = 0x0A
-        for i in chunk.indices {
-            if chunk[i] == newline {
-                if start < i { lines.append(chunk.subdata(in: start..<i)) }
-                start = chunk.index(after: i)
-                if lines.count >= maxLines { break }
-            }
-        }
-        // Tail (no trailing newline) — drop unless the read covered the whole file,
-        // since a partial last line would be malformed.
-        return lines
-    }
-
     /// The complete lines in the last 64 KB, which is where a loop tick's
     /// closing records sit: 278 of 291 ticks on dgx ended within it (2026-10-06).
     nonisolated private func readTailRecords(from url: URL) throws -> [Data] {
@@ -467,7 +437,9 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
 
     nonisolated private func deriveSummaryFields(from lines: [Data], fallbackId: String) -> SummaryFields {
         var fields = SummaryFields()
-        var sawAssistant = false
+        // Counted as the metrics index counts them: one per response, though
+        // Claude Code writes a record per content block (B-065).
+        var responses = ClaudeResponseCounter()
 
         for data in lines {
             guard let record = ClaudeTranscriptParser.parseLine(data) else { continue }
@@ -487,8 +459,7 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
             case let .assistant(_, _, timestamp, isSidechain, _):
                 guard !isSidechain else { continue }
                 if fields.startedAt == nil { fields.startedAt = timestamp }
-                sawAssistant = true
-                fields.messageCount += 1
+                if responses.opensResponse(record) { fields.messageCount += 1 }
 
             case let .systemNotification(_, _, _, timestamp):
                 if fields.startedAt == nil { fields.startedAt = timestamp }
@@ -501,7 +472,6 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
             }
         }
 
-        _ = sawAssistant
         return fields
     }
 }
