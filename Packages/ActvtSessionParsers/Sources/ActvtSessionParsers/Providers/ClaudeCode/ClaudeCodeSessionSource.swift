@@ -147,6 +147,9 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
         // filled by request records before the first, so the newest title is
         // read from the tail, where a live session's latest sits (B-061).
         if let latest = Self.latestAITitle(in: tail) { derived.aiTitle = latest }
+        // A `/rename` is re-appended the same way, so its latest (or the
+        // record that cleared it) is in the tail too (T-044, #67).
+        if let latest = Self.latestCustomTitle(in: tail) { derived.customTitle = latest }
 
         return AgentSessionSummary(
             id: id,
@@ -154,6 +157,7 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
             projectPath: derived.cwd ?? "(unknown)",
             title: derived.title ?? id,
             aiTitle: derived.aiTitle,
+            customTitle: derived.name,
             startedAt: derived.startedAt ?? session.lastUpdatedAt,
             lastUpdatedAt: session.lastUpdatedAt,
             messageCount: head.isWholeFile ? derived.messageCount : nil,
@@ -167,6 +171,15 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
     static func latestAITitle(in lines: [Data]) -> String? {
         for data in lines.reversed() {
             if case let .aiTitle(text)? = ClaudeTranscriptParser.parseLine(data) { return text }
+        }
+        return nil
+    }
+
+    /// The text of the last `custom-title` among these lines (empty when that
+    /// record cleared the name), or nil if they hold none.
+    static func latestCustomTitle(in lines: [Data]) -> String? {
+        for data in lines.reversed() {
+            if case let .customTitle(text)? = ClaudeTranscriptParser.parseLine(data) { return text }
         }
         return nil
     }
@@ -324,7 +337,7 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
                 case let .systemNotification(uuid, _, text, timestamp):
                     turns.append(.systemNotification(recordUUID: uuid, text: text, timestamp: timestamp))
 
-                case .aiTitle:
+                case .aiTitle, .customTitle:
                     return
 
                 case let .memorySources(_, sources, _, isSidechain):
@@ -419,12 +432,20 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
     /// Aggregated fields derived from the header records.
     private struct SummaryFields {
         var aiTitle: String?
+        /// The latest `custom-title` record's text; empty once a record cleared it.
+        var customTitle: String?
         var firstUserText: String?
         var cwd: String?
         var gitBranch: String?
         var startedAt: Date?
         var messageCount: Int = 0
+        /// The name the user gave with `/rename`, unless it was cleared.
+        var name: String? {
+            guard let customTitle, !customTitle.isEmpty else { return nil }
+            return customTitle
+        }
         var title: String? {
+            if let name { return name }
             if let aiTitle, !aiTitle.isEmpty { return aiTitle }
             if let firstUserText {
                 // Truncate to a single line, ~80 chars.
@@ -466,6 +487,9 @@ public actor ClaudeCodeSessionSource: AgentSessionSource {
 
             case .aiTitle(let text):
                 fields.aiTitle = text
+
+            case .customTitle(let text):
+                fields.customTitle = text
 
             case .memorySources:
                 continue

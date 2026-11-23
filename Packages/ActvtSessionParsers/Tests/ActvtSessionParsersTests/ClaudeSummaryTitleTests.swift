@@ -81,4 +81,53 @@ final class ClaudeSummaryTitleTests: XCTestCase {
         let s = try await summary("short")
         XCTAssertEqual(s.aiTitle, "Better title")
     }
+
+    // MARK: - The name given with /rename (T-044, #67)
+
+    private func name(_ text: String) -> [String: Any] {
+        ["type": "custom-title", "customTitle": text, "sessionId": "named"]
+    }
+
+    /// The dgx shape: the name sits first, Claude Code re-appends it every
+    /// 50-80 KB, and its own titles keep coming. The name is the title.
+    func testTheNameGivenWithRenameIsTheTitle() async throws {
+        try write([name("engineer smoke test"), prompt, title("Smoke test of the toolchain"), reply("a1"),
+                   request(70), name("engineer smoke test"), title("Toolchain smoke test"), reply("a2")],
+                  id: "named")
+        let s = try await summary("named")
+        XCTAssertEqual(s.title, "engineer smoke test")
+        XCTAssertEqual(s.customTitle, "engineer smoke test")
+        XCTAssertEqual(s.aiTitle, "Toolchain smoke test", "Claude's own title is kept beside it")
+    }
+
+    /// A rename late in a long session, past the head read, is found in the tail.
+    func testALateRenameIsTheTitle() async throws {
+        try write([prompt, title("LongCat support"), reply("a1"), request(100), request(100), request(100),
+                   title("LongCat-Video-Avatar ComfyUI support"), name("Comfy Agent"), reply("a2")],
+                  id: "late")
+        let s = try await summary("late")
+        XCTAssertEqual(s.title, "Comfy Agent")
+    }
+
+    /// The latest name wins, and clearing it falls back to Claude's title.
+    func testTheLatestNameWinsAndClearingFallsBack() async throws {
+        try write([prompt, name("first name"), title("Fix the deploy"), reply("a1"), name("second name"), reply("a2")],
+                  id: "renamed")
+        let renamed = try await summary("renamed")
+        XCTAssertEqual(renamed.title, "second name")
+
+        try write([prompt, name("first name"), title("Fix the deploy"), reply("a1"), name(""), reply("a2")],
+                  id: "cleared")
+        let cleared = try await summary("cleared")
+        XCTAssertEqual(cleared.title, "Fix the deploy")
+        XCTAssertNil(cleared.customTitle)
+    }
+
+    /// With no rename and no title of Claude's, the first prompt stays the title.
+    func testWithoutANameOrATitleThePromptIsTheTitle() async throws {
+        try write([prompt, reply("a1")], id: "plain")
+        let s = try await summary("plain")
+        XCTAssertNil(s.customTitle)
+        XCTAssertTrue(s.title.hasPrefix("Base directory for this skill"))
+    }
 }

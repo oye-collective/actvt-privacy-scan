@@ -32,13 +32,15 @@ public struct AgentSessionRef: Identifiable, Sendable, Hashable {
 ///
 /// Built from a small set of header records inside the JSONL — most fields come
 /// from the first 5–20 lines. `title` derivation order:
-///   1. Latest `ai-title` record (`aiTitle` field) — server-generated, preferred
-///   2. First non-CLI-echo user message text, truncated
-///   3. Session id (filename) as last resort
+///   1. Latest `custom-title` record (`customTitle` field), the name the user
+///      gave the session with `/rename`, unless that record cleared it
+///   2. Latest `ai-title` record (`aiTitle` field) — server-generated
+///   3. First non-CLI-echo user message text, truncated
+///   4. Session id (filename) as last resort
 ///
-/// A user-set title, when one exists, takes precedence over all three. Providers
-/// never see it: the app's session store applies it on read via `renamed(to:)`,
-/// so `aiTitle` always keeps the server-generated value.
+/// A title set in Actvt, when one exists, takes precedence over all four.
+/// Providers never see it: the app's session store applies it on read via
+/// `renamed(to:)`, so `customTitle` and `aiTitle` keep what the transcript says.
 public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
     public let id: String
     public let agentKind: AgentKind
@@ -56,6 +58,10 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
     /// `title` so the UI can show it preferentially if `highlightAiTitles` UX
     /// is added later.
     public let aiTitle: String?
+
+    /// The name the user gave the session in the agent itself (Claude Code's
+    /// `/rename`), when one is set. It outranks `aiTitle` in `title`.
+    public let customTitle: String?
 
     /// Timestamp of the first record in the transcript.
     public let startedAt: Date
@@ -89,6 +95,7 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
         projectPath: String,
         title: String,
         aiTitle: String?,
+        customTitle: String? = nil,
         startedAt: Date,
         lastUpdatedAt: Date,
         messageCount: Int?,
@@ -101,6 +108,7 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
         self.projectPath = projectPath
         self.title = title
         self.aiTitle = aiTitle
+        self.customTitle = customTitle
         self.startedAt = startedAt
         self.lastUpdatedAt = lastUpdatedAt
         self.messageCount = messageCount
@@ -111,8 +119,9 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
 
     public var compositeKey: String { "\(agentKind.rawValue):\(id)" }
 
-    /// A copy with only `title` replaced. `aiTitle` and every other field are
-    /// kept, so the server-generated title stays inspectable after a rename.
+    /// A copy with only `title` replaced. `aiTitle`, `customTitle` and every
+    /// other field are kept, so the transcript's titles stay inspectable after
+    /// a rename in Actvt.
     public func renamed(to title: String) -> AgentSessionSummary {
         AgentSessionSummary(
             id: id,
@@ -120,6 +129,7 @@ public struct AgentSessionSummary: Identifiable, Sendable, Hashable {
             projectPath: projectPath,
             title: title,
             aiTitle: aiTitle,
+            customTitle: customTitle,
             startedAt: startedAt,
             lastUpdatedAt: lastUpdatedAt,
             messageCount: messageCount,

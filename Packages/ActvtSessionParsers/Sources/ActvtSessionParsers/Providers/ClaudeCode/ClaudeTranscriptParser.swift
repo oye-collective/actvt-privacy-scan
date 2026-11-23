@@ -17,6 +17,7 @@ import os.log
 /// Record types currently surfaced:
 /// - `user` / `assistant` / `system` → turns (with `isSidechain == true` filtered)
 /// - `ai-title` → metadata only (used for summary title)
+/// - `custom-title` → metadata only: the name the user gave with `/rename`
 /// - `attachment` of type `instructions` / `nested_memory` → the memory
 ///   sources the agent loaded
 /// Other types observed in real transcripts (`permission-mode`,
@@ -34,17 +35,20 @@ public enum ClaudeTranscriptParser {
         case assistant(uuid: String, blocks: [AssistantRawBlock], timestamp: Date, isSidechain: Bool, meta: AssistantMeta)
         case systemNotification(uuid: String, subtype: String, text: String, timestamp: Date)
         case aiTitle(text: String)
+        /// The name the user gave the session with `/rename`. Claude Code
+        /// re-appends it as the session goes; an empty text clears it.
+        case customTitle(text: String)
         case memorySources(uuid: String, sources: [MemorySource], timestamp: Date, isSidechain: Bool)
 
         /// Record identity, stable across copies into another session's
-        /// transcript. `nil` for `ai-title`, which carries no `uuid`.
+        /// transcript. `nil` for `ai-title` and `custom-title`, which carry no `uuid`.
         public var uuid: String? {
             switch self {
             case let .userText(uuid, _, _, _, _, _):    return uuid
             case let .userToolResults(uuid, _, _, _):   return uuid
             case let .assistant(uuid, _, _, _, _):      return uuid
             case let .systemNotification(uuid, _, _, _): return uuid
-            case .aiTitle:                              return nil
+            case .aiTitle, .customTitle:                return nil
             case let .memorySources(uuid, _, _, _):     return uuid
             }
         }
@@ -162,6 +166,7 @@ public enum ClaudeTranscriptParser {
         case "assistant": record = parseAssistantRecord(dict)
         case "system":    record = parseSystemRecord(dict)
         case "ai-title":  record = parseAiTitleRecord(dict)
+        case "custom-title": record = parseCustomTitleRecord(dict)
         case "attachment": record = parseAttachmentRecord(dict)
         default:          record = nil
         }
@@ -345,6 +350,11 @@ public enum ClaudeTranscriptParser {
     private static func parseAiTitleRecord(_ dict: [String: Any]) -> ParsedRecord? {
         guard let title = dict["aiTitle"] as? String, !title.isEmpty else { return nil }
         return .aiTitle(text: title)
+    }
+
+    private static func parseCustomTitleRecord(_ dict: [String: Any]) -> ParsedRecord? {
+        guard let title = dict["customTitle"] as? String else { return nil }
+        return .customTitle(text: title.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// The instruction files and memory index Claude Code put into the

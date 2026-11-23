@@ -121,7 +121,7 @@ extension ClaudeTranscriptParser.ParsedRecord {
              let .assistant(_, _, _, isSidechain, _),
              let .memorySources(_, _, _, isSidechain):
             return isSidechain
-        case .systemNotification, .aiTitle:
+        case .systemNotification, .aiTitle, .customTitle:
             return false
         }
     }
