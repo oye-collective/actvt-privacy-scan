@@ -1,5 +1,7 @@
 # actvt-privacy-scan
 
+[![As seen on Open Source Alternatives](https://www.opensourcealternatives.to/badge-osa.svg)](https://www.opensourcealternatives.to)
+
 `privacy-scan` checks the AI coding-agent sessions on your machine for secrets and personal data
 that ended up in them: API keys pasted into a prompt, a token printed by a tool, an email address
 in a reply.
@@ -26,11 +28,21 @@ The Actvt app adds an on-device AI detector for names and addresses, which isn't
 ## Usage
 
 ```
-privacy-scan [--json]
+privacy-scan [--json] [path ...]
 ```
 
-- With no options, it prints the findings and a summary.
+- With no path, it scans the agents' own folders on this machine, archived Codex sessions
+  included, and prints the findings and a summary.
+- With paths, it scans those files and folders instead. It reads every `.jsonl` (or Codex's
+  compressed `.jsonl.zst`) in them written by Claude Code, Codex or Pi, told apart by its records,
+  so you can check a copy or an export before you share it.
 - `--json` prints one JSON object per finding on stdout, and the summary on stderr.
+
+This checks a folder of traces before you upload it to the Hugging Face Hub.
+
+```sh
+privacy-scan ~/exports/my-traces
+```
 
 Exit status: `0` nothing found, `1` something found, `2` an error. That makes it usable in a
 script or a hook:
@@ -50,20 +62,22 @@ swift test
 .build/release/privacy-scan
 ```
 
-Both packages use Foundation only. They have no third-party dependencies and no networking code.
+Both packages use Foundation only, with no package dependencies and no networking code. The only
+third-party code in the tree is zstd's decoder (BSD), vendored as `CZstd` to read the `.jsonl.zst`
+files Codex compresses old sessions into.
 
 ## Layout
 
 ```
 Packages/
-  ActvtPrivacyScan/   the scanner library (ActvtPrivacyScan) and the privacy-scan CLI
-  ActvtSessionsKit/   session discovery for Claude Code, Codex and Pi (also builds actvt-cli)
+  ActvtPrivacyScan/      the scanner library (ActvtPrivacyScan) and the privacy-scan CLI
+  ActvtSessionParsers/   session discovery and transcript parsers for Claude Code, Codex and Pi
 ```
 
 ## Contributing
 
-This repository is synced from the Actvt app at each Actvt release: the sync replaces
-`Packages/` and leaves the rest alone. Issues and pull requests are welcome here. An accepted
+This repository is synced from the Actvt app at each Actvt release. The sync replaces
+`Packages/` and this README, and leaves the rest alone. Issues and pull requests are welcome here. An accepted
 change is applied in Actvt and comes back with the next release's sync.
 
 ## License
